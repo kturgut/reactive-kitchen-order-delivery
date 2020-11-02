@@ -1,45 +1,100 @@
 package cloudkitchens.delivery
 
 
-import java.util.Date
+import java.time.{Duration, LocalDateTime}
 
-import akka.actor.{Actor, ActorIdentity, ActorLogging, ActorPath, ActorRef, Cancellable, Identify, Props, Stash, Terminated}
+import akka.actor.{Actor, ActorLogging, ActorPath, ActorRef, Cancellable, Props, Stash, Terminated}
 import akka.routing.{ActorRefRoutee, RoundRobinRoutingLogic, Router}
+import akka.util.Timeout
 import cloudkitchens.CloudKitchens.{CourierDispatcherActorName, OrderProcessorActorName}
-import cloudkitchens.{CloudKitchens, kitchen, system}
+import cloudkitchens.kitchen.Kitchen.KitchenReadyForService
+import cloudkitchens.kitchen.PackagedProduct
+import cloudkitchens.kitchen.ShelfManager.{DiscardOrder}
+import cloudkitchens.order.Order
+import cloudkitchens.{CloudKitchens, JacksonSerializable, system}
 
-import scala.collection.immutable.IndexedSeq
 import scala.concurrent.duration._
+import scala.util.{Failure, Success}
 
 
 object Courier {
 
-  case class Pickup(product:kitchen.Product, time:Date)
-  case class DeliveryComplete(product:kitchen.Product, time:Date)
-  case class Decline(courierRef:ActorRef, product:kitchen.Product, originalSender:ActorRef)
+  case class CourierAssignment(order:Order,
+                               courierName:String, courierRef:ActorRef, time:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable
+
   case object DeliverNow
+
+  case class PickupRequest(assignment:CourierAssignment, time:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable
+  case class Pickup(product:PackagedProduct, time:LocalDateTime=LocalDateTime.now()) extends JacksonSerializable
+
+  case class DeliveryAcceptanceRequest(order:Order) extends JacksonSerializable
+  case class DeliveryAcceptance(order:Order, signature:String, tips:Int, time:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable
+
+  case class DeclineCourierAssignment(courierRef:ActorRef, product:PackagedProduct, originalSender:ActorRef) extends JacksonSerializable
+
+  case class DeliveryComplete(assignment:CourierAssignment, acceptance:DeliveryAcceptance, time:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
+    def prettyString():String = {
+      s"Delivery of product '${assignment.order.name} completed in ${(Duration.between(time, assignment.time).toMillis / 1000)%1.2f} seconds, with tip amount:${acceptance.tips}."
+    }
+  }
   case class Unavailable(courier:ActorRef)
   case class Available(courier:ActorRef)
-  def props(name:String) = Props(new Courier(name))
+  def props(name:String, orderProcessor:ActorRef, shelfManager:ActorRef) = Props(new Courier(name,orderProcessor,shelfManager))
 }
 
 
-class Courier(name:String) extends Actor  with ActorLogging {
+class Courier(name:String,orderProcessor:ActorRef, shelfManager:ActorRef) extends Actor  with ActorLogging {
   import Courier._
   import cloudkitchens.system.dispatcher
+  import akka.pattern.ask
 
   override val receive:Receive = available
   lazy val randomizer = new scala.util.Random(100L)
+  implicit val timeout = Timeout (300 milliseconds)
 
   def available:Receive = {
-    case product:kitchen.Product =>
-      log.info(s"$name received order to pickup product: $product")
-      val pickedUpProduct = Pickup(product,new Date())
-      sender() ! pickedUpProduct
+    case product:PackagedProduct =>
+      val assignment = CourierAssignment(product.order, name, self)
+      log.info(s"$name received order to pickup product: ${product.order.name}")
+      orderProcessor ! assignment
+      shelfManager ! assignment
       context.parent ! Unavailable(self)
-      context.become(onDelivery(reminderToDeliver(),pickedUpProduct))
+      context.become(onDelivery(reminderToDeliver(),assignment))
 
     case message => log.warning(s"Unrecognized message received from $sender(). The message: $message")
+  }
+
+  def onDelivery(scheduledAction:Cancellable, assignment: CourierAssignment):Receive = {
+    case discard:DiscardOrder =>
+      log.info(s"Cancelling trip for delivery for ${assignment.order.name} as product was discarded due to ${discard.reason}")
+      becomeAvailable(scheduledAction)
+
+    case DeliverNow =>
+      val future = shelfManager ? PickupRequest(assignment)
+      val action = scheduledAction
+      future.onComplete {
+        case Success(None) =>
+          log.info(s"Cancelling trip for delivery for ${assignment.order.name} as product was discarded. Reason for cancellation unknown.")
+          becomeAvailable(action)
+        case Success(pickup:Pickup) =>
+          (assignment.order.customer ? DeliveryAcceptanceRequest (pickup.product.order)).onComplete {
+            case Success(acceptance:DeliveryAcceptance) =>
+              val delivery =   DeliveryComplete(assignment,acceptance)
+              log.info(delivery.prettyString)
+              orderProcessor ! delivery
+              becomeAvailable(action)
+            case Success(message) => log.warning(s"Customer did not want to provide signature but sent this response: $message")
+              becomeAvailable(action)
+            case Failure(exception) => log.error(s"Exception received while waiting for customer signature. ${exception.getMessage}")
+          }
+        case Failure(exception) =>
+          log.error(s"Exception received while picking up package. Canceling delivery! Exception detail: ${exception.getMessage}")
+          becomeAvailable(action)
+      }
+
+    case product:PackagedProduct =>
+      log.warning(s"Courier $name received pickup order while already on delivery. Declining!")
+      DeclineCourierAssignment(self, product, sender())
   }
 
   def reminderToDeliver():Cancellable = {
@@ -49,82 +104,55 @@ class Courier(name:String) extends Actor  with ActorLogging {
     }
   }
 
-  def onDelivery(scheduledAction:Cancellable, pickup: Pickup):Receive = {
-    case DeliverNow =>
-      val delivery = DeliveryComplete(pickup.product,new Date())
-      context.parent !
-      log.info(s"Delivery of product '${pickup.product} " +
-        s"completed in ${((delivery.time.getTime - pickup.time.getTime).toFloat / 1000)%1.2f} seconds")
-      scheduledAction.cancel()
-      context.parent ! Available(self)
-      sender() ! delivery
-      context.become(available)
-    case product:kitchen.Product =>
-      log.warning(s"Courier $name received pickup order while already on delivery. Declining!")
-      Decline(self, product, sender())
+  private def becomeAvailable(scheduledAction:Cancellable): Unit = {
+    scheduledAction.cancel()
+    context.parent ! Available(self)
   }
-}
-
-object CourierDispatcher {
-
-  case class Initialize(numberOfCouriers:Int, orderProcessorActorPath:ActorPath)
-//  case class InitializeWithOrderProcessor(numberOfCouriers:Int, orderProcessorRef:ActorRef)
 
 }
 
 class CourierDispatcher extends Actor with Stash with ActorLogging {
-  import CourierDispatcher._
   import Courier._
-  val CourierDispatcher_OrderProcessor_CorrelationId = 77
 
-  override val receive:Receive = noteReadyForService(IndexedSeq.empty)
+  def numberOfCouriers(maxNumberOfOrdersPerSecond:Int):Int = maxNumberOfOrdersPerSecond * 10
 
-  def noteReadyForService(slaves:IndexedSeq[ActorRefRoutee]): Receive = {
+  override val receive:Receive = noteReadyForService
 
-    case Initialize(n, orderProcessorPath) =>
-      val slaves = for (id <- 1 to n) yield {
-        val courier = context.actorOf(Courier.props(s"Courier_$id"),s"Courier_$id")
+  def noteReadyForService: Receive = {
+
+    case KitchenReadyForService(_, expectedOrdersPerSecond, _, orderProcessorRef, shelfManagerRef) =>
+      val slaves = for (id <- 1 to numberOfCouriers(expectedOrdersPerSecond)) yield {
+        val courier = context.actorOf(Courier.props(s"Courier_$id",orderProcessorRef, shelfManagerRef),s"Courier_$id")
         context.watch(courier)
         ActorRefRoutee(courier)
       }
-      context.actorSelection(orderProcessorPath) ! Identify (CourierDispatcher_OrderProcessor_CorrelationId)
-      log.info(s"CourierDispatcher is being initialized with $n couriers in roundRobin mode with $orderProcessorPath" )
-      context.become(noteReadyForService(slaves))
-
-    case ActorIdentity(CourierDispatcher_OrderProcessor_CorrelationId, Some(orderProcessorActorRef)) =>
-      context.watch(orderProcessorActorRef)
       val router = Router(RoundRobinRoutingLogic(),slaves)
-      log.info(s"CourierDispatcher established connection with OrderProcessor. Ready for service!" )
+      log.info(s"CourierDispatcher connected with OrderProcessor and ShelfManager. Ready for service with ${slaves.size} couriers!" )
       unstashAll()
-      context.become(active(orderProcessorActorRef, router))
-
-    case ActorIdentity(CourierDispatcher_OrderProcessor_CorrelationId, None) =>
-      log.error(s"CourierDispatcher could not establish connection with ${CloudKitchens.OrderProcessorActorName}. Shutting down")
-      context.stop(self)
-
+      context.become(active(orderProcessorRef, shelfManagerRef, router))
     case _ =>
       log.info(s"CourierDispatcher is not active. Stashing all messages")
       stash()
   }
 
-  def active(orderProcessor:ActorRef, router:Router):Receive = {
+  def active(orderProcessor:ActorRef, shelfManager:ActorRef, router:Router):Receive = {
     case Terminated(ref) =>
       log.warning(s"Courier '${ref.path.name}' is terminated, creating replacement!")
       val newCourier = context.actorOf(
-        Courier.props(s"Replacement for ${ref.path.name})"), s"${ref.path.name}_replacement")
+        Courier.props(s"Replacement for ${ref.path.name})", orderProcessor,shelfManager), s"${ref.path.name}_replacement")
       context.watch(newCourier)
-      context.become(active(orderProcessor, router.addRoutee(ref).removeRoutee(ref)))
+      context.become(active(orderProcessor, shelfManager,router.addRoutee(ref).removeRoutee(ref)))
 
     case Unavailable(courierRef) =>
       log.info(s"Courier with path${courierRef.path} is now unavailable. Removed from dispatch crew")
-      context.become(active(orderProcessor,router.removeRoutee(courierRef)))
+      context.become(active(orderProcessor,shelfManager,router.removeRoutee(courierRef)))
 
     case Available(courierRef) =>
       log.info(s"Courier with path${courierRef.path} is now available. Added to dispatch crew")
-      context.become(active(orderProcessor,router.addRoutee(courierRef)))
+      context.become(active(orderProcessor, shelfManager,router.addRoutee(courierRef)))
 
     // reroute if courier declines
-    case Decline(courierRef, product,originalSender) =>
+    case DeclineCourierAssignment(courierRef, product,originalSender) =>
       router.route(product,originalSender)
 
     case message => router.route(message,sender())
@@ -133,8 +161,6 @@ class CourierDispatcher extends Actor with Stash with ActorLogging {
 
 
 object CourierDispatcherManualTest extends App {
-  import CourierDispatcher._
   val root = system.actorOf(Props[CloudKitchens])
   val dispatcher = system.actorOf(Props[CourierDispatcher],CourierDispatcherActorName)
-  dispatcher ! Initialize(3,root.path/OrderProcessorActorName)
 }

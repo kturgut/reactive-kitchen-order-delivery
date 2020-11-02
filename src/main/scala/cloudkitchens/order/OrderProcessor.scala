@@ -1,18 +1,19 @@
 package cloudkitchens.order
 
 import java.time.LocalDateTime
-import java.util.Timer
 
-import akka.actor.{ActorIdentity, ActorLogging, ActorPath, ActorRef, Identify, Props}
+import akka.actor.{ActorIdentity, ActorLogging, ActorRef, Identify, Props}
 import akka.persistence.{PersistentActor, RecoveryCompleted}
 import cloudkitchens.CloudKitchens.KitchenActorName
+import cloudkitchens.customer.Customer
 import cloudkitchens.delivery.Courier.DeliveryComplete
+import cloudkitchens.delivery.CourierDispatcher
 import cloudkitchens.kitchen.Kitchen
-import cloudkitchens.{JacksonSerializable, defaultKitchenActorPath, defaultOrderProcessorActorPath, kitchen, system}
+import cloudkitchens.{JacksonSerializable, kitchen, system}
 import cloudkitchens.kitchen.Kitchen.KitchenReadyForService
 
 import scala.collection.immutable.ListMap
-import scala.concurrent.duration.DurationInt
+
 
 case object OrderProcessor {
 
@@ -21,7 +22,7 @@ case object OrderProcessor {
 
   // EVENTS
   case class OrderRecord(time:LocalDateTime, order:Order)  extends JacksonSerializable
-  case class ProductRecord(time:LocalDateTime, product:kitchen.Product)  extends JacksonSerializable
+  case class ProductRecord(time:LocalDateTime, product:kitchen.PackagedProduct)  extends JacksonSerializable
   case class DeliveryCompleteRecord(time:LocalDateTime, delivery:DeliveryComplete)  extends JacksonSerializable
   case class KitchenRelationshipRecord(name:String, actorPath:String) extends JacksonSerializable
 
@@ -45,15 +46,16 @@ class OrderProcessor extends PersistentActor with ActorLogging {
   // normal command handler
   override def receiveCommand() : Receive = {
 
-    case KitchenReadyForService(name,actorRef) =>
-      val event = KitchenRelationshipRecord(name,actorRef.path.toString)
+    case KitchenReadyForService(name,_, kitchenRef, _, _) =>
+      val event = KitchenRelationshipRecord(name,kitchenRef.path.toString)
       persist(event) { eventRecorded =>
-        log.info(s"A new kitchen named:${eventRecorded.name} is registered to receive orders at:${actorRef}.")
-        kitchens += (eventRecorded.name -> actorRef)
-        if (kitchens.isEmpty) unstashAll()
+        log.info(s"A new kitchen named:${eventRecorded.name} is registered to receive orders at:${kitchenRef.path}.")
+        kitchens += (eventRecorded.name -> kitchenRef)
+        unstashAll()
       }
     case order:Order =>
-      if (kitchens.isEmpty) stash()
+      if (kitchens.isEmpty)
+        stash()
       else {
         val event = OrderRecord(LocalDateTime.now(),order)
         log.debug(s"Received $order on ${event.time}")
@@ -67,9 +69,8 @@ class OrderProcessor extends PersistentActor with ActorLogging {
           updateState(order, (lifeCycle:OrderLifeCycle)=>lifeCycle, ()=>OrderLifeCycle(order))
         }
       }
-    case product:kitchen.Product =>
+    case product:kitchen.PackagedProduct =>
         val event =  ProductRecord(LocalDateTime.now(),product)
-//        log.debug(s"Received $product on ${event.time}")
         persist(event) { event=>
           log.debug(s"Received product creation record: ${event.product}")
           updateState(event.product.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.product,log),
@@ -77,20 +78,17 @@ class OrderProcessor extends PersistentActor with ActorLogging {
         }
     case delivery:DeliveryComplete =>
       val event =  DeliveryCompleteRecord(LocalDateTime.now(),delivery)
-//      log.debug(s"Received $product on ${event.time}")
       persist(event) { event=>
-        log.debug(s"Received delivery record for order for ${event.delivery.product.order.name} with id ${event.delivery.product.order.id}")
-        updateState(event.delivery.product.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.delivery,log),
-          ()=>OrderLifeCycle(event.delivery.product.order,Some(event.delivery.product)))
+        log.debug(s"Received delivery record for order for ${event.delivery.assignment.order.name} with id ${event.delivery.assignment.order.id}")
+        updateState(event.delivery.assignment.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.delivery,log),
+          ()=>OrderLifeCycle(event.delivery.assignment.order,Some(event.delivery.assignment)))
       }
-
-
     case ActorIdentity(name, Some(actorRef)) =>
       log.error(s"OrderProcessor re-establish connection with kitchen named $name")
       kitchens  = kitchens + (name.toString -> actorRef)
     case ActorIdentity(name, None) =>
-      log.error(s"OrderProcessor could not re-establish connection with kitchen named $name")
-      // kitchens  = kitchens - name.toString //TODO this should not happen.
+      log.error(s"OrderProcessor could not re-establish connection with kitchen named $name. THIS SHOULD NOT HAPPEN!")
+       kitchens  = kitchens - name.toString //TODO this should not happen.
 
     case other => log.warning(s"Received unrecognized message $other")
   }
@@ -156,12 +154,14 @@ class OrderProcessor extends PersistentActor with ActorLogging {
 
 case object OrderHandlerTest extends App {
   val orderHandler = cloudkitchens.system.actorOf(Props[OrderProcessor],"orderHandler")
-  val kitchen = system.actorOf(Kitchen.props(Kitchen.TurkishCousine),s"${KitchenActorName}_${Kitchen.TurkishCousine}")
-  Thread.sleep(100)
-  kitchen ! Kitchen.Initialize(defaultKitchenActorPath, defaultOrderProcessorActorPath)
-  println("KAGAN",kitchen.path)
+  val dispatcher = cloudkitchens.system.actorOf(Props[CourierDispatcher],"dispatcher")
+  val kitchen = system.actorOf(Kitchen.props(Kitchen.TurkishCousine,2),s"${KitchenActorName}_${Kitchen.TurkishCousine}")
+  kitchen ! Kitchen.InitializeKitchen(orderHandler,dispatcher)
+
+  val customer = cloudkitchens.system.actorOf(Props[Customer])
+
   for (i<-1 to 100) {
-    orderHandler ! Order(i.toString, s" yummy_food_$i", "hot", i*10, 1f/i)
+    orderHandler ! Order(i.toString, s" yummy_food_$i", "hot", i*10, 1f/i, customer)
   }
 }
 

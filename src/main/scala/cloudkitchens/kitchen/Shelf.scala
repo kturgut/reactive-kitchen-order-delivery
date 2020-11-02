@@ -2,6 +2,7 @@ package cloudkitchens.kitchen
 
 import java.time.LocalDateTime
 
+import akka.event.LoggingAdapter
 import cloudkitchens.order.{Order, Temperature}
 import cloudkitchens.order.Temperature.{All, Cold, Frozen, Hot}
 
@@ -11,13 +12,15 @@ import scala.collection.mutable
 sealed case class Shelf(supports:Seq[Temperature],
                    capacity:Int=10,
                    decayModifier:Int=1,
-                   products:mutable.SortedSet[Product] = mutable.SortedSet[Product]()(Product.IncreasingValue))  {
+                   products:mutable.SortedSet[PackagedProduct] = mutable.SortedSet[PackagedProduct]()(PackagedProduct.IncreasingValue))  {
 
-  def peekHighestValue:Product = products.last
-  def peekLowestValue:Product = products.head
+  def peekHighestValue:PackagedProduct = products.last
+  def peekLowestValue:PackagedProduct = products.head
 
-  def + (elem: Product): Shelf = {products += elem; this}
-  def - (elem: Product): Shelf = {products -= elem; this}
+  def + (elem: PackagedProduct): Shelf = {products += elem; this}
+  def - (elem: PackagedProduct): Shelf = {products -= elem; this}
+
+  def get(order:Order):Option[PackagedProduct] = products.find(_.order.id == order.id)
 
   def expireOldProducts(time:LocalDateTime):Shelf = {
     this.copy(products = this.products.filter(product=> product.updatedCopy(this, time).value > 0))
@@ -39,21 +42,27 @@ case object Shelf {
     mutable.Map(All-> overflow(), Hot -> hot(), Cold -> cold(), Frozen -> frozen())
 }
 
-case class KitchenShelves (shelves: mutable.Map[Temperature, Shelf]=Shelf.temperatureSensitiveShelves) {
+case class KitchenShelves (log:LoggingAdapter, shelves: mutable.Map[Temperature, Shelf]=Shelf.temperatureSensitiveShelves) {
   assert(shelves.contains(All), "Overflow shelf not registered")
 
   def overflow = shelves(All)
   def tempSensitiveShelves = shelves - All
 
-  def createProductOnShelf(order:Order, time:LocalDateTime = LocalDateTime.now()): Product ={
+  def putOnShelf(product:PackagedProduct, time:LocalDateTime = LocalDateTime.now()): PackagedProduct ={
     shelves.values.foreach(_.expireOldProducts(time))
-    val product = Product(order, time)
     overflow.products+=product
     optimizeOverflowShelf(overflow,time)
     product
   }
 
-  def moveProductTo(source:Shelf, product:Product, target:Shelf, time:LocalDateTime):Option[Product] = {
+  def getPackageForOrder(order: Order) =
+    shelves.values.flatMap(shelf=>shelf.get(order) match {
+      case product:PackagedProduct => shelf - product; Some(product)
+      case _ => None
+    }).flatten.toList.headOption
+
+
+  def moveProductTo(source:Shelf, product:PackagedProduct, target:Shelf, time:LocalDateTime):Option[PackagedProduct] = {
     target.products += product.updatedCopy(source,time)
     source.products -=product
     if (target.overCapacity) {
@@ -72,7 +81,7 @@ case class KitchenShelves (shelves: mutable.Map[Temperature, Shelf]=Shelf.temper
         }
     }
 
-  def discardDueToOverCapacity(product:Product, shelf:Shelf, time:LocalDateTime) = {
+  def discardDueToOverCapacity(product:PackagedProduct, shelf:Shelf, time:LocalDateTime) = {
     println(s"Discarding product $product since shelf capacity is full")
     shelf.products -= product
   }

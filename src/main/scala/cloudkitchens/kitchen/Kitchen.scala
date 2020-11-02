@@ -3,8 +3,8 @@ package cloudkitchens.kitchen
 import java.util.Date
 
 import akka.actor.{Actor, ActorIdentity, ActorLogging, ActorPath, ActorRef, Identify, Props, Timers}
-import cloudkitchens.CloudKitchens.{CourierDispatcherActorName, OrderProcessorActorName, OrderStreamSimulatorActorName, ShelfManagerActorName}
-import cloudkitchens.JacksonSerializable
+import cloudkitchens.CloudKitchens.ShelfManagerActorName
+import cloudkitchens.{ComponentStatus, JacksonSerializable, NotReadyForService, ReadyForService}
 import cloudkitchens.order.Order
 
 
@@ -15,61 +15,37 @@ object Kitchen {
   val TurkishCousine = "Turkish"
   val AmericanCousine = "American"
 
-  case class KitchenReadyForService(name:String, actorRef:ActorRef) extends JacksonSerializable
-  case class Initialize(courierDispatcherPath:String, orderProcessorPath:String)  extends JacksonSerializable
+  case class InitializeKitchen(orderProcessor:ActorRef,
+                               courierDispatcher:ActorRef)  extends JacksonSerializable
+  case class KitchenReadyForService(name:String, expectedOrdersPerSecond:Int, kitchenRef:ActorRef,
+                               orderProcessorRef:ActorRef, shelfManagerRef:ActorRef) extends JacksonSerializable
+
   case class PrepareOrder(time:Date, order:Order)  extends JacksonSerializable
 
-  def props(name:String) = Props(new Kitchen(name))
+  def props(name:String, expectedOrdersPerSecond:Int) = Props(new Kitchen(name, expectedOrdersPerSecond))
 }
 
 
-class Kitchen(name:String) extends Actor with ActorLogging with Timers {
+class Kitchen(name:String, expectedOrdersPerSecond:Int) extends Actor with ActorLogging with Timers {
   import Kitchen._
 
-  override val receive:Receive = closedForService(Map.empty)
+  override val receive:Receive = closedForService
 
-  def closedForService(components: Map[String,ActorRef]): Receive = {
-    case Initialize(courierDispatcherPath, orderProcessorPath) =>
-      log.info(s"Initializing Kitchen ${self.path.toStringWithoutAddress} with $courierDispatcherPath and $orderProcessorPath")
-      timers.startSingleTimer(this, )
-      context.actorSelection(orderProcessorPath) ! Identify (Kitchen_OrderProcessor_CorrelationId)
-      context.actorSelection(courierDispatcherPath) ! Identify (Kitchen_CourierDispatcher_CorrelationId)
-      context.become(closedForService(components + (ShelfManagerActorName ->context.actorOf(Props[ShelfManager],ShelfManagerActorName))))
-
-    case ActorIdentity(Kitchen_OrderProcessor_CorrelationId, Some(orderProcessorActorRef)) =>
-      log.debug(s"Kitchen is connected with ${orderProcessorActorRef.path} ")
-      context.watch(orderProcessorActorRef)
-      components.get(CourierDispatcherActorName) match {
-        case Some(courierDispatcherRef) =>
-          orderProcessorActorRef ! KitchenReadyForService(name,self)
-          context.become(openForService(components(ShelfManagerActorName), orderProcessorActorRef, courierDispatcherRef))
-        case None => context.become(closedForService(components + (OrderProcessorActorName ->orderProcessorActorRef)))
-      }
-
-    case ActorIdentity(Kitchen_CourierDispatcher_CorrelationId, Some(courierDispatcherActorRef)) =>
-      log.debug(s"Kitchen is connected with ${courierDispatcherActorRef.path} ")
-      context.watch(courierDispatcherActorRef)
-      components.get(CourierDispatcherActorName) match {
-        case Some(orderProcessorActorRef) =>
-          orderProcessorActorRef ! KitchenReadyForService(name,self)
-          context.become(openForService(components(ShelfManagerActorName), orderProcessorActorRef, courierDispatcherActorRef))
-        case None => context.become(closedForService(components + (CourierDispatcherActorName ->courierDispatcherActorRef)))
-      }
-
-    case ActorIdentity(Kitchen_OrderProcessor_CorrelationId, None) =>
-      log.error(s"Kitchen ${self.path} could not establish connection with ${OrderProcessorActorName}. Shutting down")
-      context.stop(self)
-
-    case ActorIdentity(Kitchen_CourierDispatcher_CorrelationId, None) =>
-      log.error(s"Kitchen ${self.path} could not establish connection with ${CourierDispatcherActorName}. Shutting down")
-      context.stop(self)
+  def closedForService: Receive = {
+    case InitializeKitchen(orderProcessor,courierDispatcher) =>
+      log.info(s"Initializing Kitchen ${self.path.toStringWithoutAddress} with $courierDispatcher and $orderProcessor")
+      val shelfManager = context.actorOf(ShelfManager.props(courierDispatcher,Some(orderProcessor)),ShelfManagerActorName)
+      val readyNotice = KitchenReadyForService(name,expectedOrdersPerSecond, self,orderProcessor,shelfManager)
+      orderProcessor ! readyNotice
+      courierDispatcher ! readyNotice
+      context.become(openForService(shelfManager, orderProcessor, courierDispatcher))
   }
 
   def openForService(shelfManager:ActorRef, orderProcessor:ActorRef, courierDispatcher:ActorRef): Receive = {
     case order: Order =>
-      val product = Product(order)
+      val product = PackagedProduct(order)
       log.info(s"Kitchen $name prepared order. Sending product $product to ShelfManager to be stored until pickup by courier")
-      shelfManager ! Product(order)
+      shelfManager ! PackagedProduct(order)
       courierDispatcher ! product
       orderProcessor ! product
   }

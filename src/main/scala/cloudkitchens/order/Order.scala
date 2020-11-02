@@ -1,5 +1,7 @@
 package cloudkitchens.order
 
+import java.time.LocalDateTime
+
 import akka.event.LoggingAdapter
 import cloudkitchens.delivery.Courier.DeliveryComplete
 import cloudkitchens.kitchen
@@ -7,6 +9,7 @@ import cloudkitchens.kitchen.ShelfManager.DiscardOrder
 import spray.json.DefaultJsonProtocol.{FloatJsonFormat, IntJsonFormat, StringJsonFormat, jsonFormat5}
 import spray.json.RootJsonFormat
 import Temperature._
+import akka.actor.ActorRef
 
 
 sealed trait Temperature {
@@ -20,14 +23,28 @@ case object Temperature {
   case object UnknownTemperature extends  Temperature
 }
 
+
+case class OrderOnFile (id:String,
+                        name:String,
+                        temp:String,
+                        shelfLife:Int,
+                        decayRate: Float) {
+  override def toString: String = s"Order (name:$name, temp:$temp, shelfLife:$shelfLife secs, decayRate:$decayRate, id: $id)"
+}
+case object OrderOnFile {
+  implicit val orderJsonFormat:RootJsonFormat[OrderOnFile] = jsonFormat5(OrderOnFile.apply)
+}
+
 case class Order (id:String,
                   name:String,
-                  temp:String, //temp:Temperature, TODO fix this during json unmarshal
+                  temp: String, // TODO replace with Temperature with custom deserializer
                   shelfLife:Int,
-                  decayRate: Float) {
-  override def toString: String = s"Order (name:$name, temp:$temp, shelfLife:$shelfLife secs, decayRate:$decayRate, id: $id)"
-  def temperature:Temperature =
-    temp match {
+                  decayRate: Float,
+                  customer:ActorRef,
+                  createdOn:LocalDateTime = LocalDateTime.now()
+                 ) {
+  override def toString: String = s"Order (name:$name, temp:$temperature, shelfLife:$shelfLife secs, decayRate:$decayRate, id: $id)"
+  def temperature:Temperature = temp match {
       case "hot" => Hot
       case "cold" => Cold
       case "frozen" => Frozen
@@ -35,7 +52,10 @@ case class Order (id:String,
     }
 }
 case object Order {
-  implicit val orderJsonFormat:RootJsonFormat[Order] = jsonFormat5(Order.apply)
+
+  def fromOrderOnFile(orderOnFile:OrderOnFile, customer:ActorRef):Order = {
+    Order(orderOnFile.id,orderOnFile.name,orderOnFile.temp,orderOnFile.shelfLife,orderOnFile.decayRate,customer)
+  }
 }
 
 
@@ -48,7 +68,7 @@ case class OrderLifeCycle(order:Order,
   def delivered:Boolean = delivery.isDefined
   def discarded:Boolean = discard.isDefined
 
-  def update(productUpdate:kitchen.Product, log: LoggingAdapter): OrderLifeCycle = {
+  def update(productUpdate:kitchen.PackagedProduct, log: LoggingAdapter): OrderLifeCycle = {
     if (product.isDefined) {
       log.warning(s"Product already created for order ${order.id}"); this
     }
