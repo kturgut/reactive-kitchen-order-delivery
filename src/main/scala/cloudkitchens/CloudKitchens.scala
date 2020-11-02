@@ -1,12 +1,15 @@
 package cloudkitchens
 
-import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props, Stash, Terminated}
+import akka.actor.SupervisorStrategy.{Escalate, Restart}
+import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, OneForOneStrategy, PoisonPill, Props, Stash, Terminated}
 import cloudkitchens.delivery.CourierDispatcher
 import cloudkitchens.kitchen.Kitchen
 import cloudkitchens.order.OrderPipeline.SimulateOrdersFromFile
-import cloudkitchens.order.{OrderProcessor, OrderPipeline}
+import cloudkitchens.order.{OrderPipeline, OrderProcessor}
 
 import scala.concurrent.duration.DurationInt
+
+trait JacksonSerializable
 
 object CloudKitchens {
 
@@ -22,9 +25,9 @@ object CloudKitchens {
   val MaxNumberOfOrdersPerSecond = 2 // TODO read this from config
   def numberOfCouriersNeeded = MaxNumberOfOrdersPerSecond * 10 // TODO read from config
 
-  case class StartComponent(name:String)
-  case class ComponentStarted(name:String,ref:ActorRef)
-  case class StopComponent(name:String)
+  case class StartComponent(name:String)  extends JacksonSerializable
+  case class ComponentStarted(name:String,ref:ActorRef)  extends JacksonSerializable
+  case class StopComponent(name:String)  extends JacksonSerializable
 
   case object Initialize
   case object Shutdown
@@ -35,7 +38,16 @@ object CloudKitchens {
 
 class CloudKitchens extends Actor with ActorLogging with Stash {
   import CloudKitchens._
+
+
+  override val supervisorStrategy = OneForOneStrategy() {
+    case _:NullPointerException => Restart
+    case _: Exception => Escalate
+  }
+
   override def receive:Receive = closedForService(Map())
+
+
 
   import system.dispatcher
 
@@ -57,6 +69,10 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
       log.info(s"Stashing messages until initialization is complete")
       stash()
   }
+
+//  def connectComponents(components:Map[String,ActorRef]):Receive = {
+//    case
+//  }
 
   def openForService(components:Map[String,ActorRef], timeoutSchedule:Option[Cancellable] = None): Receive = {
 
@@ -100,25 +116,38 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
     val child = name match {
       case OrderStreamSimulatorActorName => context.actorOf(Props[OrderPipeline],OrderStreamSimulatorActorName)
       case OrderProcessorActorName => context.actorOf(Props[OrderProcessor],OrderProcessorActorName)
-      case KitchenActorName =>
-        val kitchen = context.actorOf(Kitchen.props(Kitchen.TurkishCousine),s"${KitchenActorName}_${Kitchen.TurkishCousine}")
-        kitchen ! Kitchen.Initialize(self.path/CourierDispatcherActorName, self.path/OrderProcessorActorName)
-        kitchen
-      case CourierDispatcherActorName =>
-        val courierDispatcher = context.actorOf(Props[CourierDispatcher],CourierDispatcherActorName)
-        courierDispatcher ! CourierDispatcher.Initialize (numberOfCouriersNeeded, self.path/OrderProcessorActorName)
-        courierDispatcher
+      case KitchenActorName => context.actorOf(Kitchen.props(Kitchen.TurkishCousine),s"${KitchenActorName}_${Kitchen.TurkishCousine}")
+      case CourierDispatcherActorName => context.actorOf(Props[CourierDispatcher],CourierDispatcherActorName)
+      case name => throw new IllegalArgumentException(s"Unknown component name:$name")
     }
     log.info(s"Starting component $name at path ${child.path}")
     context.watch(child)
-    sender() ! ComponentStarted(name,child)
     val withNewComponent = components + (name -> child)
+    initializeComponent(name,withNewComponent)
     if (componentNames.forall(withNewComponent.contains(_))) {
+      //initializeComponents(components)
       log.info("Initialization is complete. Replaying all queued up messages.")
+
       unstashAll()
       context.become(openForService(withNewComponent))
     } else
       context.become(closedForService(withNewComponent))
+  }
+
+  def initializeComponents(components: Map[String,ActorRef]): Unit = components.keys.foreach(name=>(name, components.get(name)) match {
+      case (KitchenActorName, Some(kitchen)) =>
+        kitchen ! Kitchen.Initialize(components(CourierDispatcherActorName).path.toString, components(OrderProcessorActorName).path.toString)
+      case (CourierDispatcherActorName, Some(courierDispatcher)) =>
+        courierDispatcher ! CourierDispatcher.Initialize (numberOfCouriersNeeded, components(OrderProcessorActorName).path)
+      case _ =>
+    })
+
+  def initializeComponent(name:String, components: Map[String,ActorRef]): Unit = (name, components.get(name)) match {
+    case (KitchenActorName, Some(kitchen)) =>
+      kitchen ! Kitchen.Initialize(components(CourierDispatcherActorName).path.toString, components(OrderProcessorActorName).path.toString)
+    case (CourierDispatcherActorName, Some(courierDispatcher)) =>
+      courierDispatcher ! CourierDispatcher.Initialize (numberOfCouriersNeeded, components(OrderProcessorActorName).path)
+    case _ =>
   }
 }
 
@@ -126,5 +155,5 @@ object CloudKitchenManualTest extends App {
   import CloudKitchens._
   val simulation = system.actorOf(Props[CloudKitchens],CloudKitchensActorName)
   simulation ! Initialize
-  simulation ! RunSimulation
+  //simulation ! RunSimulation
 }

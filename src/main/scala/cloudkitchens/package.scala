@@ -1,14 +1,14 @@
 import akka.actor.{ActorSystem, Props}
-import cloudkitchens.CloudKitchens.CloudKitchensActorSystemName
-import cloudkitchens.delivery.CourierDispatcher
-import cloudkitchens.kitchen.Kitchen
-import cloudkitchens.order.OrderProcessor
-import com.typesafe.config.ConfigFactory
+
 
 package object cloudkitchens {
 
-//  val system = ActorSystem(CloudKitchensSystem, ConfigFactory.load().getConfig(CloudKitchensSystem))
+  import CloudKitchens._
+
   val system = ActorSystem(CloudKitchensActorSystemName)
+
+  val defaultKitchenActorPath = s"${CloudKitchensActorSystemName}/user/${CloudKitchensActorName}/Kitchen_Turkish"
+  val defaultOrderProcessorActorPath = s"${CloudKitchensActorSystemName}/user/${OrderProcessorActorName}"
 
 
 //  val orderHandlerActor = CloudKitchens.system.actorOf(Props[OrderHandler],"orderHandler")

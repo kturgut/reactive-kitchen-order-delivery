@@ -1,18 +1,21 @@
 package cloudkitchens.order
 
 import java.nio.file.Paths
+
 import akka.actor.{Actor, ActorLogging, ActorRef}
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{FileIO, Flow, Sink}
 import akka.stream.alpakka.json.scaladsl.JsonReader
 import spray.json._
 import akka.util.Timeout
+import cloudkitchens.JacksonSerializable
 import cloudkitchens.order.OrderProcessor.OrderReceived
+
 import scala.concurrent.duration.DurationInt
 
 object OrderPipeline {
 
-  case class SimulateOrdersFromFile(orderHandler:ActorRef, maximumNumberOfOrdersPerSecond:Int = 2)
+  case class SimulateOrdersFromFile(orderHandler:ActorRef, maximumNumberOfOrdersPerSecond:Int = 2)  extends JacksonSerializable
 }
 
 class OrderPipeline extends Actor with ActorLogging {

@@ -1,7 +1,9 @@
 package cloudkitchens.kitchen
 
 import akka.actor.{Actor, ActorLogging, Timers}
+import cloudkitchens.JacksonSerializable
 import cloudkitchens.order.Order
+
 import scala.concurrent.duration.DurationInt
 
 
@@ -18,7 +20,7 @@ object ShelfManager {
   case object ExpiredShelfLife extends DiscardReason
   case object ShelfCapacityExceeded extends DiscardReason
 
-  case class DiscardOrder(order:Order, reason:DiscardReason)
+  case class DiscardOrder(order:Order, reason:DiscardReason)  extends JacksonSerializable
 }
 
 class ShelfManager extends Actor with ActorLogging with Timers {

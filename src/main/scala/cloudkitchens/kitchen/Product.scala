@@ -7,7 +7,7 @@ import java.time.temporal.ChronoUnit
 import cloudkitchens.order.Order
 
 case class Product(value:Float, remainingShelfLife:Float, createdOn:LocalDateTime, lastUpdated:LocalDateTime, order:Order) {
-  implicit val dateFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+  import Product._
   override def toString() = s"Product (name:${order.name}, value:$value, createdOn:${createdOn.format(dateFormatter)}, lastUpdatedOn:${lastUpdated.format(dateFormatter)}, orderId:${order.id})"
 
   implicit val ordering = Product.IncreasingValue
@@ -22,6 +22,7 @@ case class Product(value:Float, remainingShelfLife:Float, createdOn:LocalDateTim
 }
 
 case object Product{
+  val dateFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
   object IncreasingValue extends Ordering[Product] {
     def compare(a:Product, b:Product):Int = a.value compare b.value
   }

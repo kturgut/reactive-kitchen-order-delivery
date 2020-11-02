@@ -2,9 +2,9 @@ package cloudkitchens.kitchen
 
 import java.util.Date
 
-import akka.actor.{Actor, ActorIdentity, ActorLogging, ActorPath, ActorRef, Identify, Props}
+import akka.actor.{Actor, ActorIdentity, ActorLogging, ActorPath, ActorRef, Identify, Props, Timers}
 import cloudkitchens.CloudKitchens.{CourierDispatcherActorName, OrderProcessorActorName, OrderStreamSimulatorActorName, ShelfManagerActorName}
-
+import cloudkitchens.JacksonSerializable
 import cloudkitchens.order.Order
 
 
@@ -15,15 +15,15 @@ object Kitchen {
   val TurkishCousine = "Turkish"
   val AmericanCousine = "American"
 
-  case class KitchenReadyForService(name:String, actorRef:ActorRef)
-  case class Initialize(courierDispatcherPath:ActorPath, orderProcessorPath:ActorPath)
-  case class PrepareOrder(time:Date, order:Order)
+  case class KitchenReadyForService(name:String, actorRef:ActorRef) extends JacksonSerializable
+  case class Initialize(courierDispatcherPath:String, orderProcessorPath:String)  extends JacksonSerializable
+  case class PrepareOrder(time:Date, order:Order)  extends JacksonSerializable
 
   def props(name:String) = Props(new Kitchen(name))
 }
 
 
-class Kitchen(name:String) extends Actor with ActorLogging {
+class Kitchen(name:String) extends Actor with ActorLogging with Timers {
   import Kitchen._
 
   override val receive:Receive = closedForService(Map.empty)
@@ -31,6 +31,7 @@ class Kitchen(name:String) extends Actor with ActorLogging {
   def closedForService(components: Map[String,ActorRef]): Receive = {
     case Initialize(courierDispatcherPath, orderProcessorPath) =>
       log.info(s"Initializing Kitchen ${self.path.toStringWithoutAddress} with $courierDispatcherPath and $orderProcessorPath")
+      timers.startSingleTimer(this, )
       context.actorSelection(orderProcessorPath) ! Identify (Kitchen_OrderProcessor_CorrelationId)
       context.actorSelection(courierDispatcherPath) ! Identify (Kitchen_CourierDispatcher_CorrelationId)
       context.become(closedForService(components + (ShelfManagerActorName ->context.actorOf(Props[ShelfManager],ShelfManagerActorName))))
