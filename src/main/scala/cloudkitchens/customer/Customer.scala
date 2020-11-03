@@ -42,7 +42,7 @@ class Customer extends Actor with ActorLogging {
     val orderHandlerFlow = Flow[Order].ask[OrderReceived](4)(orderHandler)
 
     //val printFlow = Flow[Order].map{order=> println(order);order}
-    val sampleFlow = Flow[Order].take(2)
+    val sampleFlow = Flow[Order].take(1)
 
     val ordersFromFileSource = FileIO.fromPath(Paths.get("./src/main/resources/orders.json"))
       .via(JsonReader.select("$[*]")).async
@@ -50,7 +50,7 @@ class Customer extends Actor with ActorLogging {
 
     ordersFromFileSource.async
       .map(orderOnFile=> Order.fromOrderOnFile(orderOnFile,self))
-      .via(sampleFlow)
+    //  .via(sampleFlow)
       .throttle(maxNumberOfOrdersPerSecond, 1.second)
     //  .via(printFlow)
       .via(orderHandlerFlow).async

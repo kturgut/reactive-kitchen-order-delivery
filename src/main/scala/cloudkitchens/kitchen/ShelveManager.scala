@@ -1,64 +1,100 @@
 package cloudkitchens.kitchen
 
 
+import java.time.LocalDateTime
+
 import akka.actor.{Actor, ActorLogging, ActorRef, Props, Timers}
 import cloudkitchens.JacksonSerializable
-import cloudkitchens.delivery.Courier.{Pickup, PickupRequest}
-
+import cloudkitchens.delivery.Courier.{CourierAssignment, Pickup, PickupRequest}
 import cloudkitchens.order.Order
+import com.fasterxml.jackson.annotation.JsonTypeName
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize
+import com.fasterxml.jackson.databind.deser.std.StdDeserializer
 
+import scala.collection.immutable.ListMap
 import scala.concurrent.duration.DurationInt
 
 
 object ShelfManager {
 
   case object TimerKey
-  case object Start
-  case object Stop
+  case object StartAutomaticShelfLifeOptimization
+  case object StopAutomaticShelfLifeOptimization
   case object ManageProductsOnShelves
+
+  val MaximumCourierAssignmentCacheSize = 100
 
 
   sealed trait DiscardReason
-  case object ExpiredShelfLife extends DiscardReason
-  case object ShelfCapacityExceeded extends DiscardReason
 
-  case class DiscardOrder(order:Order, reason:DiscardReason)  extends JacksonSerializable
-  case class PickupReceipt(order:Order, reason:DiscardReason)  extends JacksonSerializable
 
-  def props(courierDispatcher:ActorRef, orderProcessorOption:Option[ActorRef]) = Props(new ShelfManager(courierDispatcher,orderProcessorOption))
+  // TODO Turn discard reason to trait
+  case class DiscardOrder(order:Order, reason:String, createdOn:LocalDateTime = LocalDateTime.now())  extends JacksonSerializable
+  val ExpiredShelfLife = "ExpiredShelfLife"
+  val ShelfCapacityExceeded = "ShelfCapacityExceeded"
+
+  def props(orderProcessorOption:Option[ActorRef]) = Props(new ShelfManager(orderProcessorOption))
 }
 
-class ShelfManager(courierDispatcher:ActorRef, orderProcessorOption:Option[ActorRef]=None)
+class ShelfManager(orderProcessorOption:Option[ActorRef]=None)
                                                     extends Actor with ActorLogging with Timers {
   import ShelfManager._
-  timers.startSingleTimer(TimerKey, Start, 100 millis)
+  timers.startSingleTimer(TimerKey, StartAutomaticShelfLifeOptimization, 100 millis)
 
-  override def receive:Receive = readyForService(KitchenShelves(log))
+  override def receive:Receive = readyForService(ListMap.empty, KitchenShelves(log))
 
-  def readyForService(kitchenShelves: KitchenShelves):Receive = {
-    case Start =>
-      log.info("Starting Shelf Manager that will reorder items on shelf periodically")
-      timers.startTimerWithFixedDelay(TimerKey,ManageProductsOnShelves, 10 second)
+  def readyForService(courierAssignments:ListMap[Order,CourierAssignment], kitchenShelves: KitchenShelves):Receive = {
+
+    case StartAutomaticShelfLifeOptimization =>
+      timers.startTimerWithFixedDelay(TimerKey,ManageProductsOnShelves, 1 second)
+
+    case StopAutomaticShelfLifeOptimization =>
+      timers.cancel(TimerKey)
+
     case ManageProductsOnShelves =>
-      log.debug("Shuffling orders among shelves for longer shelf life, and discarding wasted orders")
+      val updatedAssignments = broadcastDiscardedOrders(kitchenShelves.optimizeShelfPlacement(),courierAssignments)
+      context.become(readyForService(updatedAssignments,kitchenShelves.copy()))
+
     case product:PackagedProduct =>
       log.info(s"Putting new product on shelf")
-      kitchenShelves.putOnShelf(product)
-      context.become(readyForService(kitchenShelves.copy()))
+      val updatedAssignments = broadcastDiscardedOrders(kitchenShelves.putPackageOnShelf(product),courierAssignments)
+      context.become(readyForService(updatedAssignments,kitchenShelves.copy()))
 
     case pickupRequest:PickupRequest =>
       log.debug(s"Shelf manager received pickup request ${pickupRequest.assignment}")
-      sender () ! (kitchenShelves.getPackageForOrder(pickupRequest.assignment.order) match {
+      sender () ! (kitchenShelves.removePackageForOrder(pickupRequest.assignment.order) match {
         case Some(product:PackagedProduct) =>
           val pickup = Pickup(product)
           orderProcessorOption.foreach(_ ! pickup)
           sender() ! pickup
-          context.become(readyForService(kitchenShelves.copy()))
+          context.become(readyForService(courierAssignments,kitchenShelves.copy()))
         case None => None
       })
-    case Stop =>
-        log.warning("Stopping Shelf Manager")
 
+    case assignment:CourierAssignment =>
+      log.debug(s"Shelf manager received courier assignment: $assignment")
+      context.become(readyForService((
+        courierAssignments + (assignment.order -> assignment)).take(MaximumCourierAssignmentCacheSize), kitchenShelves))
+
+    case StopAutomaticShelfLifeOptimization =>
+        log.warning("Stopping Shelf Manager")
   }
+  private def broadcastDiscardedOrders(discardedOrders: Iterable[DiscardOrder],
+                                       courierAssignments:ListMap[Order,CourierAssignment]):ListMap[Order,CourierAssignment] = {
+    var assignments = courierAssignments
+    discardedOrders.foreach(discardedOrder => courierAssignments.get(discardedOrder.order) match {
+      case Some(assignment:CourierAssignment) =>
+        log.debug(s"Sending discarded order notice $discardedOrder to courier ${assignment.courierRef}")
+        assignment.courierRef ! discardedOrder
+        log.debug(s"Sending discarded order notice $discardedOrder to orderProcessor ${orderProcessorOption.get}")
+        orderProcessorOption.foreach(_ ! discardedOrder)
+
+        assignments -= assignment.order
+      case _ => // update order lifecycle
+        orderProcessorOption.foreach(_ ! discardedOrder)
+    })
+    assignments
+  }
+
 
 }

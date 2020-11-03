@@ -8,9 +8,10 @@ import cloudkitchens.CloudKitchens.KitchenActorName
 import cloudkitchens.customer.Customer
 import cloudkitchens.delivery.Courier.DeliveryComplete
 import cloudkitchens.delivery.CourierDispatcher
-import cloudkitchens.kitchen.Kitchen
+import cloudkitchens.kitchen.{Kitchen, PackagedProduct}
 import cloudkitchens.{JacksonSerializable, kitchen, system}
 import cloudkitchens.kitchen.Kitchen.KitchenReadyForService
+import cloudkitchens.kitchen.ShelfManager.DiscardOrder
 
 import scala.collection.immutable.ListMap
 
@@ -24,6 +25,7 @@ case object OrderProcessor {
   case class OrderRecord(time:LocalDateTime, order:Order)  extends JacksonSerializable
   case class ProductRecord(time:LocalDateTime, product:kitchen.PackagedProduct)  extends JacksonSerializable
   case class DeliveryCompleteRecord(time:LocalDateTime, delivery:DeliveryComplete)  extends JacksonSerializable
+  case class DiscardOrderRecord(time:LocalDateTime, discard:DiscardOrder)  extends JacksonSerializable
   case class KitchenRelationshipRecord(name:String, actorPath:String) extends JacksonSerializable
 
   val MaximumSizeForLifeCycleCache = 200
@@ -69,13 +71,20 @@ class OrderProcessor extends PersistentActor with ActorLogging {
           updateState(order, (lifeCycle:OrderLifeCycle)=>lifeCycle, ()=>OrderLifeCycle(order))
         }
       }
-    case product:kitchen.PackagedProduct =>
+    case product:PackagedProduct =>
         val event =  ProductRecord(LocalDateTime.now(),product)
         persist(event) { event=>
           log.debug(s"Received product creation record: ${event.product}")
           updateState(event.product.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.product,log),
             ()=>OrderLifeCycle(event.product.order,Some(event.product)))
         }
+    case discard:DiscardOrder =>
+      val event =  DiscardOrderRecord(LocalDateTime.now(),discard)
+      persist(event) { event=>
+        log.debug(s"Received discard order record ${event.discard.order.name} with id ${event.discard.order.id}")
+        updateState(event.discard.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.discard,log),
+          ()=>OrderLifeCycle(event.discard.order,Some(event.discard.order)))
+      }
     case delivery:DeliveryComplete =>
       val event =  DeliveryCompleteRecord(LocalDateTime.now(),delivery)
       persist(event) { event=>
@@ -90,7 +99,7 @@ class OrderProcessor extends PersistentActor with ActorLogging {
       log.error(s"OrderProcessor could not re-establish connection with kitchen named $name. THIS SHOULD NOT HAPPEN!")
        kitchens  = kitchens - name.toString //TODO this should not happen.
 
-    case other => log.warning(s"Received unrecognized message $other")
+    case other => log.warning(s"Received unrecognized message $other from sender: ${sender()}")
   }
 
   // will be called on recovery.. in case we need to restart OrderHandler after a crash
@@ -114,6 +123,11 @@ class OrderProcessor extends PersistentActor with ActorLogging {
       log.info(s"Recovering  $product received on: $date  ")
       updateState(product.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(product,log),
         ()=>OrderLifeCycle(product.order,Some(product)))
+
+    case DiscardOrderRecord(date,discard) =>
+      log.info(s"Recovering  $discard received on: $date  ")
+      updateState(discard.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(discard,log),
+          ()=>OrderLifeCycle(discard.order,Some(discard.order)))
   }
 
   /**

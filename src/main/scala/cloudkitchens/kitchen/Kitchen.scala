@@ -34,7 +34,7 @@ class Kitchen(name:String, expectedOrdersPerSecond:Int) extends Actor with Actor
   def closedForService: Receive = {
     case InitializeKitchen(orderProcessor,courierDispatcher) =>
       log.info(s"Initializing Kitchen ${self.path.toStringWithoutAddress} with $courierDispatcher and $orderProcessor")
-      val shelfManager = context.actorOf(ShelfManager.props(courierDispatcher,Some(orderProcessor)),ShelfManagerActorName)
+      val shelfManager = context.actorOf(ShelfManager.props(Some(orderProcessor)),ShelfManagerActorName)
       val readyNotice = KitchenReadyForService(name,expectedOrdersPerSecond, self,orderProcessor,shelfManager)
       orderProcessor ! readyNotice
       courierDispatcher ! readyNotice

@@ -8,7 +8,7 @@ import cloudkitchens.order.Order
 
 case class PackagedProduct(value:Float, remainingShelfLife:Float, createdOn:LocalDateTime, lastUpdated:LocalDateTime, order:Order) {
   import PackagedProduct._
-  override def toString() = s"Product (name:${order.name}, value:$value, createdOn:${createdOn.format(dateFormatter)}, lastUpdatedOn:${lastUpdated.format(dateFormatter)}, orderId:${order.id})"
+  override def toString() = s"Product (name:${order.name}, temp:${order.temp}, value:$value, createdOn:${createdOn.format(dateFormatter)}, lastUpdatedOn:${lastUpdated.format(dateFormatter)}, orderId:${order.id})"
 
   implicit val ordering = PackagedProduct.IncreasingValue
 

@@ -77,10 +77,6 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
       stash()
   }
 
-//  def connectComponents(components:Map[String,ActorRef]):Receive = {
-//    case
-//  }
-
   def openForService(components:Map[String,ActorRef], timeoutSchedule:Option[Cancellable] = None): Receive = {
 
     case StartComponent(name) => startComponent(name, components)
@@ -141,7 +137,7 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
 
   def initializeComponents(components: Map[String,ActorRef]): Unit = components.keys.foreach(name=>(name, components.get(name)) match {
       case (KitchenActorName, Some(kitchen)) =>
-        kitchen ! Kitchen.InitializeKitchen(components(CourierDispatcherActorName), components(OrderProcessorActorName))
+        kitchen ! Kitchen.InitializeKitchen(components(OrderProcessorActorName),components(CourierDispatcherActorName))
       case _ =>
     })
 }

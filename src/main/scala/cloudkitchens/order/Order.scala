@@ -43,7 +43,7 @@ case class Order (id:String,
                   customer:ActorRef,
                   createdOn:LocalDateTime = LocalDateTime.now()
                  ) {
-  override def toString: String = s"Order (name:$name, temp:$temperature, shelfLife:$shelfLife secs, decayRate:$decayRate, id: $id)"
+  override def toString: String = s"Order (name:$name, temp:$temp, shelfLife:$shelfLife secs, decayRate:$decayRate, id: $id)"
   def temperature:Temperature = temp match {
       case "hot" => Hot
       case "cold" => Cold
