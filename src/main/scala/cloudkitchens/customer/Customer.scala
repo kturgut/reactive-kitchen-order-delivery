@@ -18,25 +18,28 @@ import scala.concurrent.duration.DurationInt
 object Customer {
   val customerHappinessThresholdInMilliseconds = 4000
 
-  case class SimulateOrdersFromFile(orderHandler:ActorRef, maximumNumberOfOrdersPerSecond:Int = 2)  extends JacksonSerializable
+  case class SimulateOrdersFromFile(orderHandler:ActorRef, maximumNumberOfOrdersPerSecond:Int = 2, realistic:Boolean=true)  extends JacksonSerializable
 }
 
 class Customer extends Actor with ActorLogging {
   import Customer._
 
   override def receive:Receive = {
-    case SimulateOrdersFromFile(orderHandler, maxNumberOfOrdersPerSec) =>
-      simulateOrdersFromFile(orderHandler,maxNumberOfOrdersPerSec)
+    case SimulateOrdersFromFile(orderHandler, maxNumberOfOrdersPerSec,realistic) =>
+      simulateOrdersFromFile(orderHandler,maxNumberOfOrdersPerSec,realistic)
 
     case DeliveryAcceptanceRequest(order) =>
-      if (Duration.between(order.createdOn, LocalDateTime.now()).toMillis < customerHappinessThresholdInMilliseconds)
-        DeliveryAcceptance(order, "Just in time. Thank you!!", 20)
-      else
-        DeliveryAcceptance(order, "Thanks", 3)
-
+      sender() ! signatureWithTip(order)
   }
 
-  def simulateOrdersFromFile(orderHandler:ActorRef, maxNumberOfOrdersPerSecond:Int = 2): Unit = {
+  def signatureWithTip(order: Order):DeliveryAcceptance = {
+    if (Duration.between(order.createdOn, LocalDateTime.now()).toMillis < customerHappinessThresholdInMilliseconds)
+      DeliveryAcceptance(order, "Just in time. Thank you!!", 20)
+    else
+      DeliveryAcceptance(order, "Thanks", 3)
+  }
+
+  def simulateOrdersFromFile(orderHandler:ActorRef, maxNumberOfOrdersPerSecond:Int = 2, realistic:Boolean): Unit = {
     implicit val timeout = Timeout(3 seconds)
     implicit val system = context.system
     val orderHandlerFlow = Flow[Order].ask[OrderReceived](4)(orderHandler)
@@ -47,10 +50,12 @@ class Customer extends Actor with ActorLogging {
     val ordersFromFileSource = FileIO.fromPath(Paths.get("./src/main/resources/orders.json"))
       .via(JsonReader.select("$[*]")).async
       .map(byteString => byteString.utf8String.parseJson.convertTo[OrderOnFile])
+      //.map(order=> if (realistic) order.copy(shelfLife = order.shelfLife / 10) else order)
+      .map(order=> if (realistic) order.copy(shelfLife = order.shelfLife * 10) else order)
 
     ordersFromFileSource.async
       .map(orderOnFile=> Order.fromOrderOnFile(orderOnFile,self))
-    //  .via(sampleFlow)
+      .via(sampleFlow)
       .throttle(maxNumberOfOrdersPerSecond, 1.second)
     //  .via(printFlow)
       .via(orderHandlerFlow).async

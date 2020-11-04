@@ -60,13 +60,11 @@ class OrderProcessor extends PersistentActor with ActorLogging {
         stash()
       else {
         val event = OrderRecord(LocalDateTime.now(),order)
-        log.debug(s"Received $order on ${event.time}")
         persist(event) { eventRecorded=>
-          log.debug(s"Persisted $orderCounter order records. Last order received was for $lastOrderReceived")
           orderCounter +=1
           lastOrderReceived = eventRecorded.order.name
           sender() ! OrderReceived(order.id)
-          log.info(s"Recorded received $order on ${event.time}. Sending it kitchen now $order")
+          log.info(s"Received ${orderCounter}th order on ${event.time}. Sending it kitchen:$order")
           selectKitchenForOrder(kitchens, order) ! order
           updateState(order, (lifeCycle:OrderLifeCycle)=>lifeCycle, ()=>OrderLifeCycle(order))
         }
@@ -74,21 +72,21 @@ class OrderProcessor extends PersistentActor with ActorLogging {
     case product:PackagedProduct =>
         val event =  ProductRecord(LocalDateTime.now(),product)
         persist(event) { event=>
-          log.debug(s"Received product creation record: ${event.product}")
+          log.debug(s"Order update: produced: ${event.product}")
           updateState(event.product.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.product,log),
             ()=>OrderLifeCycle(event.product.order,Some(event.product)))
         }
     case discard:DiscardOrder =>
       val event =  DiscardOrderRecord(LocalDateTime.now(),discard)
       persist(event) { event=>
-        log.debug(s"Received discard order record ${event.discard.order.name} with id ${event.discard.order.id}")
+        log.debug(s"Order update: discarded: ${event.discard.order.name} with id ${event.discard.order.id}")
         updateState(event.discard.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.discard,log),
           ()=>OrderLifeCycle(event.discard.order,Some(event.discard.order)))
       }
     case delivery:DeliveryComplete =>
       val event =  DeliveryCompleteRecord(LocalDateTime.now(),delivery)
       persist(event) { event=>
-        log.debug(s"Received delivery record for order for ${event.delivery.assignment.order.name} with id ${event.delivery.assignment.order.id}")
+        log.debug(s"Order update: delivered: ${event.delivery.assignment.order.name} with id ${event.delivery.assignment.order.id}")
         updateState(event.delivery.assignment.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.delivery,log),
           ()=>OrderLifeCycle(event.delivery.assignment.order,Some(event.delivery.assignment)))
       }
@@ -99,15 +97,17 @@ class OrderProcessor extends PersistentActor with ActorLogging {
       log.error(s"OrderProcessor could not re-establish connection with kitchen named $name. THIS SHOULD NOT HAPPEN!")
        kitchens  = kitchens - name.toString //TODO this should not happen.
 
-    case other => log.warning(s"Received unrecognized message $other from sender: ${sender()}")
+    case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
 
   // will be called on recovery.. in case we need to restart OrderHandler after a crash
   override def receiveRecover():Receive = {
 
     case RecoveryCompleted =>
-      reportStateAfterRecovery()
-      reissueOrdersNotProcessed()
+      if (orderCounter>0) {
+        reportStateAfterRecovery()
+        reissueOrdersNotProcessed()
+      }
 
     case KitchenRelationshipRecord(name,actorPath) =>
         log.info(s"Recovering relationship with kitchen named ${name} servicing at:${actorPath}.")

@@ -2,20 +2,15 @@ package cloudkitchens.delivery
 
 import akka.actor.ActorSystem
 import akka.testkit.{ImplicitSender, TestActorRef, TestKit, TestProbe}
-import cloudkitchens.TestSpecHelper
+import cloudkitchens.{BaseSpec, TestSpecHelper}
 import cloudkitchens.delivery.Courier.{Available, CourierAssignment, DeclineCourierAssignment, OnAssignment, PickupRequest}
 import cloudkitchens.kitchen.Kitchen.KitchenReadyForService
 import org.scalatest.{BeforeAndAfterAll, WordSpecLike}
 
 import scala.concurrent.duration.DurationInt
 
-class CourierSpec extends TestKit (ActorSystem("TestActorSystem")) with ImplicitSender with TestSpecHelper
-  with WordSpecLike
-  with BeforeAndAfterAll{
+class CourierSpec extends BaseSpec {
 
-  override def afterAll(): Unit = {
-    TestKit.shutdownActorSystem(system)
-  }
   "A CourierActor" should {
     val orderProcessor = TestProbe(OrderProcessorName)
     val shelfManager = TestProbe(ShelfManagerName)

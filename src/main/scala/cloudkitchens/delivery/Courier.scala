@@ -16,7 +16,9 @@ import scala.util.{Failure, Success}
 object Courier {
 
   case class CourierAssignment(order:Order,
-                               courierName:String, courierRef:ActorRef, time:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable
+                               courierName:String, courierRef:ActorRef, createdOn:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
+    def prettyString = s"Courier ${courierName} is assigned to deliver order ${order.name} with id ${order.id}."
+  }
 
   case object DeliverNow
 
@@ -30,7 +32,7 @@ object Courier {
 
   case class DeliveryComplete(assignment:CourierAssignment, acceptance:DeliveryAcceptance, time:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
     def prettyString():String = {
-      s"Delivery of product '${assignment.order.name} completed in ${(Duration.between(time, assignment.time).toMillis / 1000)%1.2f} seconds, with tip amount:${acceptance.tips}."
+      s"Delivery of product '${assignment.order.name} completed in ${(Duration.between(assignment.createdOn,time).toMillis / 1000)%1.2f} seconds, with tip amount:${acceptance.tips}."
     }
   }
   case class OnAssignment(courier:ActorRef)
@@ -54,12 +56,8 @@ class Courier(name:String,orderProcessor:ActorRef, shelfManager:ActorRef) extend
       val courier = self
       val assignment = CourierAssignment(product.order, name, courier)
 
-      val assignment1 = CourierAssignment(product.order, "BIR", courier)
-      val assignment2 = CourierAssignment(product.order, "IKI", courier)
-      val assignment3 = CourierAssignment(product.order, "UC", courier)
-
       log.info(s"$name received order to pickup product: ${product.order.name}")
-      shelfManager ! assignment2
+      shelfManager ! assignment
       context.parent ! OnAssignment(self)
       context.become(onDelivery(reminderToDeliver(self),assignment))
 
@@ -78,7 +76,7 @@ class Courier(name:String,orderProcessor:ActorRef, shelfManager:ActorRef) extend
       val action = scheduledAction
       future.onComplete {
         case Success(None) =>
-          log.info(s"Cancelling trip for delivery for ${assignment.order.name} as product was discarded. Reason for cancellation unknown.")
+          log.info(s"Cancelling trip for delivery for ${assignment.order.name} as product was discarded. Reason unknown.")
           becomeAvailable(action)
         case Success(pickup:Pickup) =>
           (assignment.order.customer ? DeliveryAcceptanceRequest (pickup.product.order)).onComplete {

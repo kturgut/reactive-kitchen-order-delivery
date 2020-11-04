@@ -24,10 +24,6 @@ object ShelfManager {
 
   val MaximumCourierAssignmentCacheSize = 100
 
-
-  sealed trait DiscardReason
-
-
   // TODO Turn discard reason to trait
   case class DiscardOrder(order:Order, reason:String, createdOn:LocalDateTime = LocalDateTime.now())  extends JacksonSerializable
   val ExpiredShelfLife = "ExpiredShelfLife"
@@ -36,8 +32,8 @@ object ShelfManager {
   def props(orderProcessorOption:Option[ActorRef]) = Props(new ShelfManager(orderProcessorOption))
 }
 
-class ShelfManager(orderProcessorOption:Option[ActorRef]=None)
-                                                    extends Actor with ActorLogging with Timers {
+class ShelfManager(orderProcessorOption:Option[ActorRef]=None) extends Actor with ActorLogging with Timers {
+
   import ShelfManager._
   timers.startSingleTimer(TimerKey, StartAutomaticShelfLifeOptimization, 100 millis)
 
@@ -56,23 +52,26 @@ class ShelfManager(orderProcessorOption:Option[ActorRef]=None)
       context.become(readyForService(updatedAssignments,kitchenShelves.copy()))
 
     case product:PackagedProduct =>
-      log.info(s"Putting new product on shelf")
+      log.debug(s"Putting new product ${product.prettyString} on shelf")
       val updatedAssignments = broadcastDiscardedOrders(kitchenShelves.putPackageOnShelf(product),courierAssignments)
       context.become(readyForService(updatedAssignments,kitchenShelves.copy()))
 
     case pickupRequest:PickupRequest =>
-      log.debug(s"Shelf manager received pickup request ${pickupRequest.assignment}")
-      sender () ! (kitchenShelves.removePackageForOrder(pickupRequest.assignment.order) match {
-        case Some(product:PackagedProduct) =>
-          val pickup = Pickup(product)
-          orderProcessorOption.foreach(_ ! pickup)
-          sender() ! pickup
-          context.become(readyForService(courierAssignments,kitchenShelves.copy()))
-        case None => None
-      })
+      log.debug(s"Shelf manager received pickup request ${pickupRequest.assignment.prettyString}")
+      val productOption = kitchenShelves.fetchPackageForOrder(pickupRequest.assignment.order)
+      sender() ! (if (productOption.isDefined) {Pickup(productOption.get) } else None)
+//
+//      (kitchenShelves.fetchPackageForOrder(pickupRequest.assignment.order) match {
+//        case Some(product) =>
+//          val pickup = Pickup(product)
+//          orderProcessorOption.foreach(_ ! pickup)
+//          sender() ! pickup
+//        case None => sender() ! None
+//      })
+      context.become(readyForService(courierAssignments,kitchenShelves.copy()))
 
     case assignment:CourierAssignment =>
-      log.debug(s"Shelf manager received courier assignment: $assignment")
+      log.debug(s"Shelf manager received assignment: ${assignment.prettyString}")
       context.become(readyForService((
         courierAssignments + (assignment.order -> assignment)).take(MaximumCourierAssignmentCacheSize), kitchenShelves))
 

@@ -40,6 +40,8 @@ object CloudKitchens {
   case object Shutdown
   case object GracefulShutdown
   case object RunSimulation
+  case object RunRealisticSimulation
+
 }
 
 
@@ -97,7 +99,15 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
         log.info(s"Starting Order Simulation with components: [${components.keys.mkString(",")}]")
         components.get(OrderProcessorActorName) match {
           case Some(orderHandler) => components.get(OrderStreamSimulatorActorName) match {
-            case Some(simulator) => simulator ! SimulateOrdersFromFile(orderHandler,MaxNumberOfOrdersPerSecond)
+            case Some(simulator) => simulator ! SimulateOrdersFromFile(orderHandler,MaxNumberOfOrdersPerSecond,false)
+          }}
+      }
+    case RunRealisticSimulation =>
+      system.scheduler.scheduleOnce(100 milliseconds) {
+        log.info(s"Starting Order Simulation with components: [${components.keys.mkString(",")}]")
+        components.get(OrderProcessorActorName) match {
+          case Some(orderHandler) => components.get(OrderStreamSimulatorActorName) match {
+            case Some(simulator) => simulator ! SimulateOrdersFromFile(orderHandler,MaxNumberOfOrdersPerSecond, true)
           }}
       }
   }
@@ -144,7 +154,9 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
 
 object CloudKitchenManualTest extends App {
   import CloudKitchens._
-  val simulation = system.actorOf(Props[CloudKitchens],CloudKitchensActorName)
-  simulation ! Initialize
-  simulation ! RunSimulation
+  val demo = system.actorOf(Props[CloudKitchens],CloudKitchensActorName)
+  demo ! Initialize
+  // demo ! RunSimulation
+  demo ! RunRealisticSimulation
+
 }
