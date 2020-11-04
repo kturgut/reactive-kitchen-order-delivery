@@ -50,12 +50,12 @@ class Customer extends Actor with ActorLogging {
     val ordersFromFileSource = FileIO.fromPath(Paths.get("./src/main/resources/orders.json"))
       .via(JsonReader.select("$[*]")).async
       .map(byteString => byteString.utf8String.parseJson.convertTo[OrderOnFile])
-      //.map(order=> if (realistic) order.copy(shelfLife = order.shelfLife / 10) else order)
-      .map(order=> if (realistic) order.copy(shelfLife = order.shelfLife * 10) else order)
+      .map(order=> if (realistic) order.copy(shelfLife = order.shelfLife / 10) else order)
+      //.map(order=> if (realistic) order.copy(shelfLife = order.shelfLife * 10) else order) // for debugging
 
     ordersFromFileSource.async
       .map(orderOnFile=> Order.fromOrderOnFile(orderOnFile,self))
-      .via(sampleFlow)
+      //.via(sampleFlow)
       .throttle(maxNumberOfOrdersPerSecond, 1.second)
     //  .via(printFlow)
       .via(orderHandlerFlow).async

@@ -30,9 +30,9 @@ object Courier {
 
   case class DeclineCourierAssignment(courierRef:ActorRef, product:PackagedProduct, originalSender:ActorRef) extends JacksonSerializable
 
-  case class DeliveryComplete(assignment:CourierAssignment, acceptance:DeliveryAcceptance, time:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
+  case class DeliveryComplete(assignment:CourierAssignment, product:PackagedProduct, acceptance:DeliveryAcceptance, time:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
     def prettyString():String = {
-      s"Delivery of product '${assignment.order.name} completed in ${(Duration.between(assignment.createdOn,time).toMillis / 1000)%1.2f} seconds, with tip amount:${acceptance.tips}."
+      s"Delivery of product '${assignment.order.name} completed in ${(Duration.between(assignment.createdOn,time).toMillis / 1000)%1.2f} seconds, with value ${product.value}. Tip received:${acceptance.tips}."
     }
   }
   case class OnAssignment(courier:ActorRef)
@@ -73,7 +73,7 @@ class Courier(name:String,orderProcessor:ActorRef, shelfManager:ActorRef) extend
 
     case DeliverNow =>
       val future = shelfManager ? PickupRequest(assignment)
-      val action = scheduledAction
+      val action = scheduledAction // !!! Do not use scheduleAction directly as future may be executed on different thread
       future.onComplete {
         case Success(None) =>
           log.info(s"Cancelling trip for delivery for ${assignment.order.name} as product was discarded. Reason unknown.")
@@ -81,11 +81,11 @@ class Courier(name:String,orderProcessor:ActorRef, shelfManager:ActorRef) extend
         case Success(pickup:Pickup) =>
           (assignment.order.customer ? DeliveryAcceptanceRequest (pickup.product.order)).onComplete {
             case Success(acceptance:DeliveryAcceptance) =>
-              val delivery =   DeliveryComplete(assignment,acceptance)
+              val delivery = DeliveryComplete(assignment,pickup.product,acceptance)
               log.info(delivery.prettyString)
               orderProcessor ! delivery
               becomeAvailable(action)
-            case Success(message) => log.warning(s"Customer did not want to provide signature but sent this response: $message. THIS SHOULD NOT HAPPEN")
+            case Success(message) => log.error(s"Customer did not want to provide signature but sent this response: $message. THIS SHOULD NOT HAPPEN")
               becomeAvailable(action)
             case Failure(exception) => log.error(s"Exception received while waiting for customer signature. ${exception.getMessage}")
           }
@@ -100,8 +100,7 @@ class Courier(name:String,orderProcessor:ActorRef, shelfManager:ActorRef) extend
   }
 
   def reminderToDeliver(courierActorRefToRemind:ActorRef):Cancellable = {
-    val delay = randomizer.nextFloat() * 4 + 2 //
-    log.debug (s"Wokeup with reminder to deliver. courierRef: ${courierActorRefToRemind.path}")
+    val delay = randomizer.nextFloat() * 4 + 2
     context.system.scheduler.scheduleOnce(delay seconds) {
       courierActorRefToRemind ! DeliverNow
     }

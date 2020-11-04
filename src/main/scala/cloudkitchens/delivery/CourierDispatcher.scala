@@ -31,6 +31,7 @@ class CourierDispatcher extends Actor with Stash with ActorLogging {
 
   def active(orderProcessor:ActorRef, shelfManager:ActorRef, router:Router):Receive = {
     case Terminated(ref) =>
+      context.unwatch(ref)
       log.warning(s"Courier '${ref.path.name}' is terminated, creating replacement!")
       val newCourier = context.actorOf(
         Courier.props(s"Replacement for ${ref.path.name})", orderProcessor,shelfManager), s"${ref.path.name}_replacement")

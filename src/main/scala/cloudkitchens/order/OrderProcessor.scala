@@ -39,6 +39,7 @@ class OrderProcessor extends PersistentActor with ActorLogging {
   var lastOrderReceived = "Unknown"
   var deliveryCounter = 0
   var discardedOrderCounter = 0
+  var totalTipsReceived = 0
 
   override val persistenceId:String = "persistentOrderProcessorId"
 
@@ -86,7 +87,9 @@ class OrderProcessor extends PersistentActor with ActorLogging {
     case delivery:DeliveryComplete =>
       val event =  DeliveryCompleteRecord(LocalDateTime.now(),delivery)
       persist(event) { event=>
-        log.debug(s"Order update: delivered: ${event.delivery.assignment.order.name} with id ${event.delivery.assignment.order.id}")
+        val tip = event.delivery.acceptance.tips
+        totalTipsReceived += tip
+        log.debug(s"Order update: delivered: ${event.delivery.prettyString()}")
         updateState(event.delivery.assignment.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.delivery,log),
           ()=>OrderLifeCycle(event.delivery.assignment.order,Some(event.delivery.assignment)))
       }
@@ -153,6 +156,7 @@ class OrderProcessor extends PersistentActor with ActorLogging {
   def reportStateAfterRecovery() = {
     log.info("OrderProcessor completed recovery of state upon restart")
     log.info(s"  Total orders received:$orderCounter.")
+    log.info(s"  Total tips received:$orderCounter.")
     log.info(s"  Total active orders:${activeOrders.size}")
     log.info(s"  Orders pending production: ${activeOrders.values.count(!_.produced)}.")
     log.info(s"  Orders pending delivery: ${activeOrders.values.count(_.isComplete)}.")
@@ -166,7 +170,7 @@ class OrderProcessor extends PersistentActor with ActorLogging {
   }
 }
 
-case object OrderHandlerTest extends App {
+case object OrderHandlerManualTest extends App {
   val orderHandler = cloudkitchens.system.actorOf(Props[OrderProcessor],"orderHandler")
   val dispatcher = cloudkitchens.system.actorOf(Props[CourierDispatcher],"dispatcher")
   val kitchen = system.actorOf(Kitchen.props(Kitchen.TurkishCousine,2),s"${KitchenActorName}_${Kitchen.TurkishCousine}")

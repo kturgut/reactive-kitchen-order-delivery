@@ -34,7 +34,7 @@ class KitchenShelvesSpec extends BaseSpec {
 
     "store multiple products and preserve priority order" in {
       assert(shelf.size == 0)
-      assert(shelf.hasRoom && !shelf.overCapacity)
+      assert(shelf.hasAvailableSpace && !shelf.overCapacity)
 
       shelf += product2
       assert(shelf.size == 1)
@@ -43,17 +43,17 @@ class KitchenShelvesSpec extends BaseSpec {
       shelf += product1
       assert(shelf.size == 2)
       assert(shelf.highestValueProduct == product2 && shelf.lowestValueProduct == product1)
-      assert(shelf.hasRoom && !shelf.overCapacity)
+      assert(shelf.hasAvailableSpace && !shelf.overCapacity)
 
       shelf += product3
       assert(shelf.size == 3)
       assert(shelf.highestValueProduct == product3 && shelf.lowestValueProduct == product1)
-      assert(!shelf.hasRoom && !shelf.overCapacity)
+      assert(!shelf.hasAvailableSpace && !shelf.overCapacity)
 
       shelf += product4
       assert(shelf.size == 4)
       assert(shelf.highestValueProduct == product4 && shelf.lowestValueProduct == product1)
-      assert(!shelf.hasRoom && shelf.overCapacity)
+      assert(!shelf.hasAvailableSpace && shelf.overCapacity)
 
       shelf -= product2
       shelf -= product4
