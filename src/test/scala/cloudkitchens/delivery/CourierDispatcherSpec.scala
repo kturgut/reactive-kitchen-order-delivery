@@ -1,11 +1,10 @@
 package cloudkitchens.delivery
 
-import akka.actor.{ActorSystem, Props}
-import akka.testkit.{ImplicitSender, TestKit, TestProbe}
+import akka.actor.Props
+import akka.testkit.TestProbe
+import cloudkitchens.BaseSpec
 import cloudkitchens.CloudKitchens.CourierDispatcherActorName
-import cloudkitchens.{BaseSpec, TestSpecHelper}
 import cloudkitchens.kitchen.Kitchen.KitchenReadyForService
-import org.scalatest.{BeforeAndAfterAll, WordSpecLike}
 
 class CourierDispatcherSpec extends BaseSpec {
 

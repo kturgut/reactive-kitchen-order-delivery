@@ -1,9 +1,9 @@
 package cloudkitchens.kitchen
 
-import java.time.LocalDateTime
+import java.time.{LocalDateTime, ZoneId}
 
 import akka.event.LoggingAdapter
-import cloudkitchens.kitchen.ShelfManager.{DiscardOrder, ExpiredShelfLife}
+import cloudkitchens.kitchen.ShelfManager.{DiscardOrder, ExpiredShelfLife, ShelfCapacityExceeded}
 import cloudkitchens.order.Temperature.{All, Cold, Frozen, Hot}
 import cloudkitchens.order.{Order, Temperature}
 
@@ -15,11 +15,11 @@ private [kitchen] case class Shelf(name: String, supports: Seq[Temperature],
                         decayModifier: Int = 1,
                         var products: mutable.SortedSet[PackagedProduct] = mutable.SortedSet[PackagedProduct]()(PackagedProduct.IncreasingValue)) {
 
-  def size = products.size
+  def size:Int = products.size
 
   def canAccept(order: Order): Boolean = supports.contains(order.temperature)
 
-  def hasRoom: Boolean = products.size < capacity
+  def hasAvailableSpace: Boolean = products.size < capacity
 
   def overCapacity: Boolean = products.size > capacity
 
@@ -45,6 +45,15 @@ private [kitchen] case class Shelf(name: String, supports: Seq[Temperature],
     products = this.products.filterNot(p => discardedOrders.contains(p.order))
     discarded.toSeq
   }
+
+  implicit val localDateTimeOrdering: Ordering[LocalDateTime] = Ordering.by(x => x.atZone(ZoneId.of("UTC")).toEpochSecond)
+  def productsOrderedByOrderDate:List[PackagedProduct] = products.toList.sortBy(_.order.createdOn)(localDateTimeOrdering)
+
+  def reportContents(log:LoggingAdapter, verbose:Boolean=false): Unit = {
+    log.info(s"$name shelf capacity utilization:${products.size} / $capacity, decay rate modifier:$decayModifier.")
+    if (verbose) log.info(s"       contents: ${products.map(product=>(product.order.name,product.value)).mkString(",")}")
+  }
+
 }
 
 private [kitchen] case object Shelf {
@@ -60,88 +69,25 @@ private [kitchen] case object Shelf {
   def overflow(capacity: Int = 15, decayModifier: Int = 2) = Shelf("Overflow", All :: Hot :: Cold :: Frozen :: Nil, capacity, decayModifier)
 }
 
-private [kitchen] case class KitchenShelves(log: LoggingAdapter, shelves: mutable.Map[Temperature, Shelf] = Shelf.temperatureSensitiveShelves) {
-  assert(shelves.contains(All), "Overflow shelf not registered")
+case class ExpirationInfo(product:PackagedProduct, ifInCurrrentShelf:Long, ifMovedToTarget:Long, timeInMillisTillPickup:(Long,Long), shelf:Shelf) {
+  def willExpireForSure(millisIntoFuture:Long):Boolean = ((ifInCurrrentShelf - millisIntoFuture) < timeInMillisTillPickup._1  && (ifMovedToTarget - millisIntoFuture) < timeInMillisTillPickup._1)
 
-  def totalProductsOnShelves:Int = shelves.values.map(_.size).sum
+}
+case class ProductPair(productInOverflow:ExpirationInfo, productInTarget:ExpirationInfo) {
 
-  def fetchPackageForOrder(order: Order): Option[PackagedProduct] = shelves.values.flatMap{shelf =>
-      val packageOption = shelf.getPackageForOrder(order)
-      packageOption match {
-      case Some(product) => shelf -= product; Some(product)
-      case _ => None
-    }}.toList.headOption
-
-  def putPackageOnShelf(product: PackagedProduct, time: LocalDateTime = LocalDateTime.now()): Iterable[DiscardOrder] = {
-    overflow.products += product
-    optimizeShelfPlacement(time)
+  def willExpireForSure(millisIntoFuture:Long):Option[(Shelf,PackagedProduct)] = {
+    if (productInOverflow.willExpireForSure(millisIntoFuture)) Some((overflow, productInOverflow.product))
+    else if (productInTarget.willExpireForSure(millisIntoFuture)) Some(target,productInTarget.product)
+    else None
   }
+  def recommendedToExchange(threshold:Int):Boolean =
+    willExpireForSure(threshold).isEmpty &&
+      (productInOverflow.ifMovedToTarget + productInTarget.ifMovedToTarget) > (productInOverflow.ifInCurrrentShelf + productInTarget.ifInCurrrentShelf) &&
+      target.canAccept(productInOverflow.product.order) && overflow.canAccept(productInTarget.product.order)
 
-  private lazy val overflow: Shelf = shelves(All)
+  def inCriticalZone(threshold:Int):Boolean
+    = productInOverflow.willExpireForSure(threshold) || productInTarget.willExpireForSure(threshold)
 
-  def optimizeShelfPlacement(time: LocalDateTime = LocalDateTime.now()): Iterable[DiscardOrder] =
-    shelves.values.flatMap(_.expireEndOfLifeProducts(time)) ++ optimizeOverflowShelf(time)
-
-  private def optimizeOverflowShelf(time: LocalDateTime): List[DiscardOrder] = {
-    moveProductsToEmptySpacesInTemperatureSensitiveShelves(time)
-    var secondsIntoFuture: Int = 0
-    // if all shelves are full, carefully pick one that is about to expire soonest to discard, minimizing number of discarded orders
-    var discarded: List[DiscardOrder] = Nil
-    while (overflow.size > overflow.capacity && secondsIntoFuture < 7) {
-      secondsIntoFuture += 1
-      overflow.products.groupBy(_.order.temperature).foreach {
-        case (temperature, productsInGroup) =>
-          val target = shelves(temperature)
-          val lowestInTarget: PackagedProduct = target.lowestValueProduct
-          val lowestInOverflowInFuture = productsInGroup.head.phantomCopy(overflow.decayModifier, time.plusSeconds(secondsIntoFuture))
-          val lowestInTargetInFuture = lowestInTarget.phantomCopy(target.decayModifier, time.plusSeconds(secondsIntoFuture))
-          // switch products between overflow and target shelf and discard the one in target if (a) and (b) OR
-          // discard lowest value product in overflow if only (a)
-          // a) the lowestValue product's value in overflow will be negative if the future
-          // b) the lowestValue product in target shelf is not going to expire in  min(4,secondsIntoFuture) seconds.
-          if (lowestInOverflowInFuture.value < 0) {
-            val lowestInTargetInFutureIfMovedToOverflow = lowestInTarget.phantomCopy(overflow.decayModifier, time.plusSeconds(math.min(secondsIntoFuture, 4)))
-            if (lowestInTargetInFuture.value > lowestInOverflowInFuture.value && lowestInTargetInFutureIfMovedToOverflow.value > 0) {
-              moveProductToTargetShelfMaintainingCapacity(overflow, overflow.lowestValueProduct, target, time) match {
-                case Some(productOnShelf) =>
-                  discarded = discardDueToOverCapacity(productOnShelf, target, time) :: discarded
-                case None => discardDueToOverCapacity(lowestInOverflowInFuture, overflow, time) :: discarded
-              }
-            }
-            else discarded = discardDueToOverCapacity(lowestInOverflowInFuture, overflow, time) :: discarded
-          }
-      }
-    }
-    discarded
-  }
-
-  private def moveProductsToEmptySpacesInTemperatureSensitiveShelves(time: LocalDateTime): Unit =
-    tempSensitiveShelves.values.map(target => (target, target.supports.head, target.capacity - target.products.size)).map {
-      case (target, temp, remainingCapacity) =>
-        overflow.products.filter(_.order.temperature == temp).take(remainingCapacity).foreach {
-          case product => moveProductToTargetShelfMaintainingCapacity(overflow, product, target, time)
-        }
-    }
-
-  private def tempSensitiveShelves: mutable.Map[Temperature, Shelf] = shelves - All
-
-  private def moveProductToTargetShelfMaintainingCapacity(source: Shelf,
-                                                          product: PackagedProduct, target: Shelf, time: LocalDateTime): Option[PackagedProduct] = {
-    val updatedProduct = product.phantomCopy(source.decayModifier, time)
-    log.debug(s"Moving ${product.prettyString} from ${source.name} to ${target.name}  ")
-    target.products += updatedProduct
-    source.products -= product
-    if (target.overCapacity) {
-      val productToRemove = target.lowestValueProduct
-      target.products -= productToRemove
-      Some(productToRemove.phantomCopy(target.decayModifier, time))
-    } else
-      None
-  }
-
-  private def discardDueToOverCapacity(product: PackagedProduct, shelf: Shelf, time: LocalDateTime): DiscardOrder = {
-    shelf.products -= product
-    DiscardOrder(product.order, ShelfManager.ShelfCapacityExceeded, time)
-  }
-
+  def overflow:Shelf = productInOverflow.shelf
+  def target:Shelf = productInTarget.shelf
 }

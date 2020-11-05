@@ -26,9 +26,9 @@ object CloudKitchens {
   val ShelfManagerActorName = "ShelfManager"
   val OrderProcessorActorName = "OrderProcessor"
   val CourierDispatcherActorName = "CourierDispatcher"
-  val OrderStreamSimulatorActorName = "OrderStreamSimulator"
+  val CustomerSimulatorActorName = "OrderStreamSimulator"
   val CloudKitchensActorName = "CloudKitchens"
-  val componentNames = Seq(OrderProcessorActorName,KitchenActorName,CourierDispatcherActorName, OrderStreamSimulatorActorName)
+  val componentNames = Seq(OrderProcessorActorName,KitchenActorName,CourierDispatcherActorName, CustomerSimulatorActorName)
 
   val MaxNumberOfOrdersPerSecond = 2 // TODO read this from config
   def numberOfCouriersNeeded = MaxNumberOfOrdersPerSecond * 10 // TODO read from config
@@ -39,8 +39,7 @@ object CloudKitchens {
   case object Initialize
   case object Shutdown
   case object GracefulShutdown
-  case object RunSimulation
-  case object RunRealisticSimulation
+  case class RunSimulation (numberOfOrdersPerSecond:Int = 2, shelfLifeMultiplier:Float = 1)
 
 }
 
@@ -49,14 +48,14 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
   import CloudKitchens._
 
 
+  // TODO define custom exceptions such as detecting slow services and partitioning of
+  //  nodes and raise exceptions to be handled by this supervisor
   override val supervisorStrategy = OneForOneStrategy() {
     case _:NullPointerException => Restart
     case _: Exception => Escalate
   }
 
   override def receive:Receive = closedForService(Map())
-
-
 
   import system.dispatcher
 
@@ -65,7 +64,7 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
       log.info(s"Initializing $CloudKitchensActorName")
       self ! StartComponent(OrderProcessorActorName)
       self ! StartComponent(CourierDispatcherActorName)
-      self ! StartComponent(OrderStreamSimulatorActorName)
+      self ! StartComponent(CustomerSimulatorActorName)
       self ! StartComponent(KitchenActorName)
 
     case StartComponent(name) => startComponent(name, components)
@@ -94,22 +93,19 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
     case Terminated(ref) =>
       log.info (s"Component with ref ${ref.path} is terminated")
 
-    case RunSimulation =>
-      system.scheduler.scheduleOnce(100 milliseconds) {
-        log.info(s"Starting Order Simulation with components: [${components.keys.mkString(",")}]")
-        components.get(OrderProcessorActorName) match {
-          case Some(orderHandler) => components.get(OrderStreamSimulatorActorName) match {
-            case Some(simulator) => simulator ! SimulateOrdersFromFile(orderHandler,MaxNumberOfOrdersPerSecond,false)
-          }}
-      }
-    case RunRealisticSimulation =>
-      system.scheduler.scheduleOnce(100 milliseconds) {
-        log.info(s"Starting Order Simulation with components: [${components.keys.mkString(",")}]")
-        components.get(OrderProcessorActorName) match {
-          case Some(orderHandler) => components.get(OrderStreamSimulatorActorName) match {
-            case Some(simulator) => simulator ! SimulateOrdersFromFile(orderHandler,MaxNumberOfOrdersPerSecond, true)
-          }}
-      }
+    case RunSimulation(ordersPerSecond,shelfLifeMultiplier) => runSimulation(components, shelfLifeMultiplier, ordersPerSecond )
+
+  }
+
+  def runSimulation (components:Map[String,ActorRef], shelfLifeMultiplier: Float, numberOfOrdersPerSecond:Int ) = {
+    system.scheduler.scheduleOnce(100 milliseconds) {
+      log.info(s"Starting Order Simulation with components: [${components.keys.mkString(",")}]")
+      components.get(OrderProcessorActorName) match {
+        case Some(orderHandler) => components.get(CustomerSimulatorActorName) match {
+          case Some(simulator) => simulator ! SimulateOrdersFromFile(orderHandler,numberOfOrdersPerSecond, shelfLifeMultiplier)
+          case _ =>
+        }}
+    }
   }
 
   def createTimeoutWindow():Cancellable = {
@@ -117,7 +113,6 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
       self ! Shutdown
     }
   }
-
   def checkInitializationComplete():Cancellable = { // TODO shutdown when no activity
     context.system.scheduler.scheduleOnce(2 seconds) {
       self ! Shutdown
@@ -127,7 +122,7 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
   def startComponent(name:String, components: Map[String,ActorRef]): Unit = {
     assert(componentNames.contains(name), s"Unknown component name:$name")
     val child = name match {
-      case OrderStreamSimulatorActorName => context.actorOf(Props[Customer],OrderStreamSimulatorActorName)
+      case CustomerSimulatorActorName => context.actorOf(Props[Customer],CustomerSimulatorActorName)
       case OrderProcessorActorName => context.actorOf(Props[OrderProcessor],OrderProcessorActorName)
       case KitchenActorName => context.actorOf(Kitchen.props(Kitchen.TurkishCousine, 2),s"${KitchenActorName}_${Kitchen.TurkishCousine}")
       case CourierDispatcherActorName => context.actorOf(Props[CourierDispatcher],CourierDispatcherActorName)
@@ -138,7 +133,7 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
     val withNewComponent = components + (name -> child)
     if (componentNames.forall(withNewComponent.contains(_))) {
       initializeComponents(withNewComponent)
-      log.info("Initialization is complete. Replaying all queued up messages.")
+      log.debug("Initialization is complete. Replaying all queued up messages.")
       unstashAll()
       context.become(openForService(withNewComponent))
     } else
@@ -156,7 +151,6 @@ object CloudKitchenManualTest extends App {
   import CloudKitchens._
   val demo = system.actorOf(Props[CloudKitchens],CloudKitchensActorName)
   demo ! Initialize
-  // demo ! RunSimulation
-  demo ! RunRealisticSimulation
+  demo ! RunSimulation(10,0.3f)
 
 }

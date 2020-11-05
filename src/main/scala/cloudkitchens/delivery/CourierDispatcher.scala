@@ -1,7 +1,7 @@
 package cloudkitchens.delivery
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Stash, Terminated}
-import akka.routing.{ActorRefRoutee, RoundRobinRoutingLogic, Router}
+import akka.routing.{ActorRefRoutee, BroadcastRoutingLogic, RoundRobinRoutingLogic, Router}
 import cloudkitchens.kitchen.Kitchen.KitchenReadyForService
 import cloudkitchens.kitchen.PackagedProduct
 
@@ -11,6 +11,7 @@ class CourierDispatcher extends Actor with Stash with ActorLogging {
   def numberOfCouriers(maxNumberOfOrdersPerSecond:Int):Int = maxNumberOfOrdersPerSecond * 10
 
   override val receive:Receive = noteReadyForService
+  val MinimumNumberOfCouriersThreshold = 3
 
   def noteReadyForService: Receive = {
 
@@ -31,7 +32,6 @@ class CourierDispatcher extends Actor with Stash with ActorLogging {
 
   def active(orderProcessor:ActorRef, shelfManager:ActorRef, router:Router):Receive = {
     case Terminated(ref) =>
-      context.unwatch(ref)
       log.warning(s"Courier '${ref.path.name}' is terminated, creating replacement!")
       val newCourier = context.actorOf(
         Courier.props(s"Replacement for ${ref.path.name})", orderProcessor,shelfManager), s"${ref.path.name}_replacement")
@@ -40,6 +40,8 @@ class CourierDispatcher extends Actor with Stash with ActorLogging {
 
     case OnAssignment(courierRef) =>
       log.info(s"Courier ${courierRef.path} is now on assignment. Removed from dispatch crew")
+      if (router.routees.size<MinimumNumberOfCouriersThreshold)
+        log.error(s"Number of available couriers is below threshold: ${router.routees.size}")
       context.become(active(orderProcessor,shelfManager,router.removeRoutee(courierRef)))
 
     case Available(courierRef) =>
@@ -48,13 +50,15 @@ class CourierDispatcher extends Actor with Stash with ActorLogging {
 
     // reroute if courier declines
     case DeclineCourierAssignment(courierRef, product,originalSender) =>
-      log.debug(s"Courier declined $courierRef assignment to $product. THIS SHOULD NOT HAPPEN")
+      log.debug(s"Courier declined $courierRef assignment to $product.")
       router.route(product,originalSender)
 
     case product:PackagedProduct => router.route(product,sender())
 
     case message =>
-      log.warning(s"Unrecognized message received from $sender. The message: $message")
+      log.error(s"Unrecognized message received from $sender. The message: $message")
   }
+
+  def asBroadcastRouter(router:Router) = router.copy(logic = BroadcastRoutingLogic())
 }
 

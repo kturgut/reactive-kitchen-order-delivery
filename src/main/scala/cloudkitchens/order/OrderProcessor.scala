@@ -80,15 +80,17 @@ class OrderProcessor extends PersistentActor with ActorLogging {
     case discard:DiscardOrder =>
       val event =  DiscardOrderRecord(LocalDateTime.now(),discard)
       persist(event) { event=>
-        log.debug(s"Order update: discarded: ${event.discard.order.name} with id ${event.discard.order.id}")
+        discardedOrderCounter += 1
+        log.debug(s"Order update: discarded: ${event.discard.order.name} with id ${event.discard.order.id}. Total discarded:$discardedOrderCounter")
         updateState(event.discard.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.discard,log),
           ()=>OrderLifeCycle(event.discard.order,Some(event.discard.order)))
       }
     case delivery:DeliveryComplete =>
-      val event =  DeliveryCompleteRecord(LocalDateTime.now(),delivery)
+      val event =  DeliveryCompleteRecord(delivery.time,delivery)
       persist(event) { event=>
         val tip = event.delivery.acceptance.tips
         totalTipsReceived += tip
+        deliveryCounter += 1
         log.debug(s"Order update: delivered: ${event.delivery.prettyString()}")
         updateState(event.delivery.assignment.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.delivery,log),
           ()=>OrderLifeCycle(event.delivery.assignment.order,Some(event.delivery.assignment)))
@@ -103,7 +105,11 @@ class OrderProcessor extends PersistentActor with ActorLogging {
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
 
-  // will be called on recovery.. in case we need to restart OrderHandler after a crash
+  // This method is called on recovery e.g. in case system needs restart OrderHandler after a crash.
+  // the restart would be handled by the parent actor as part of Supervision strategy.
+  // This would give us opportunity to preserve state as, until the restart happens all incoming messages
+  // would be queued in the mailbox of the OrderProcessor. Thus for example we can reissue an order to kitchen
+  // if we had received the order but did not get the record that shows that kitchen has produced the Product yet!
   override def receiveRecover():Receive = {
 
     case RecoveryCompleted =>
@@ -131,6 +137,17 @@ class OrderProcessor extends PersistentActor with ActorLogging {
       log.info(s"Recovering  $discard received on: $date  ")
       updateState(discard.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(discard,log),
           ()=>OrderLifeCycle(discard.order,Some(discard.order)))
+
+    case DeliveryCompleteRecord(time,deliveryComplete) =>
+      log.info(s"Recovering  $deliveryComplete")
+      val tip = deliveryComplete.acceptance.tips
+      totalTipsReceived += tip
+      deliveryCounter += 1
+      log.debug(s"Order update: delivered: ${deliveryComplete.prettyString()}")
+      updateState(deliveryComplete.assignment.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(deliveryComplete,log),
+        ()=>OrderLifeCycle(deliveryComplete.assignment.order,Some(deliveryComplete.assignment)))
+
+
   }
 
   /**

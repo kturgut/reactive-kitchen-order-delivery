@@ -31,10 +31,11 @@ object Courier {
   case class DeclineCourierAssignment(courierRef:ActorRef, product:PackagedProduct, originalSender:ActorRef) extends JacksonSerializable
 
   case class DeliveryComplete(assignment:CourierAssignment, product:PackagedProduct, acceptance:DeliveryAcceptance, time:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
-    def prettyString():String = {
-      s"Delivery of product '${assignment.order.name} completed in ${(Duration.between(assignment.createdOn,time).toMillis / 1000)%1.2f} seconds, with value ${product.value}. Tip received:${acceptance.tips}."
-    }
+    def durationOrderToDeliveryInSeconds: Float = Duration.between(product.createdOn, acceptance.time).toMillis.toFloat/1000
+    def prettyString(): String = s"DeliveryComplete of product '${assignment.order.name} in " + f"$durationOrderToDeliveryInSeconds%1.2f" +
+                                  s" seconds. Value delivered:${product.value}. Tip received:${acceptance.tips}."
   }
+
   case class OnAssignment(courier:ActorRef)
   case class Available(courier:ActorRef)
 
@@ -61,6 +62,7 @@ class Courier(name:String,orderProcessor:ActorRef, shelfManager:ActorRef) extend
       context.parent ! OnAssignment(self)
       context.become(onDelivery(reminderToDeliver(self),assignment))
 
+
     case message =>
       log.warning(s"Unrecognized message received from $sender. The message: $message")
   }
@@ -73,11 +75,12 @@ class Courier(name:String,orderProcessor:ActorRef, shelfManager:ActorRef) extend
 
     case DeliverNow =>
       val future = shelfManager ? PickupRequest(assignment)
-      val action = scheduledAction // !!! Do not use scheduleAction directly as future may be executed on different thread
+      val action = scheduledAction // !!? Do not use scheduleAction directly as future may be executed on different thread
       future.onComplete {
         case Success(None) =>
           log.info(s"Cancelling trip for delivery for ${assignment.order.name} as product was discarded. Reason unknown.")
           becomeAvailable(action)
+        case Success(discard:DiscardOrder) => self ! discard
         case Success(pickup:Pickup) =>
           (assignment.order.customer ? DeliveryAcceptanceRequest (pickup.product.order)).onComplete {
             case Success(acceptance:DeliveryAcceptance) =>
@@ -92,6 +95,7 @@ class Courier(name:String,orderProcessor:ActorRef, shelfManager:ActorRef) extend
         case Failure(exception) =>
           log.error(s"Exception received while picking up package. Canceling delivery! Exception detail: ${exception.getMessage}")
           becomeAvailable(action)
+        case other => log.error(s"Unexpected response received $other")
       }
 
     case product:PackagedProduct =>
@@ -109,5 +113,6 @@ class Courier(name:String,orderProcessor:ActorRef, shelfManager:ActorRef) extend
   private def becomeAvailable(scheduledAction:Cancellable): Unit = {
     scheduledAction.cancel()
     context.parent ! Available(self)
+    context.become(available)
   }
 }

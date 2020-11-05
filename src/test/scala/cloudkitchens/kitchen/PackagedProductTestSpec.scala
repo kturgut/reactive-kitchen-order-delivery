@@ -12,6 +12,13 @@ class PackagedProductTestSpec extends BaseSpec {
      val time = LocalDateTime.now()
      var product = samplePackagedProduct(1, orderProcessor.ref, 10, 0.5f)
 
+     "be able to create a copy of itself in future time maintaining original creation time" in {
+       val timeInFuture = time.plusSeconds(2)
+       val phantom = product.phantomCopy(2, timeInFuture)
+       assert(phantom.createdOn == phantom.createdOn)
+       assert(phantom.updatedOn == timeInFuture)
+     }
+
      "value should deprecate over time based on decayRate and shelf decayModifier" in {
        val actual = for (secondsIntoFuture <- 0 until 10)
          yield {

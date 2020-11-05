@@ -63,6 +63,7 @@ case class OrderLifeCycle(order:Order,
                           product:Option[Product]=None,
                           delivery:Option[DeliveryComplete]=None,
                           discard:Option[DiscardOrder]=None) {
+
   def isComplete:Boolean = produced && (delivered || discarded)
   def produced: Boolean = product.isDefined
   def delivered:Boolean = delivery.isDefined
@@ -76,7 +77,7 @@ case class OrderLifeCycle(order:Order,
   }
   def update(deliveryUpdate:DeliveryComplete,  log: LoggingAdapter): OrderLifeCycle = {
     if (delivery.isDefined) {
-      log.warning(s"Delivery already happened for order ${order.id}"); this
+      log.warning(s"Delivery already happened for order ${order.id}")
     }
     if (discard.isDefined) {
       log.error(s"This order ${order.id} is already delivered on ${delivery.get.time}, Ignoring discard notice"); this
@@ -85,7 +86,7 @@ case class OrderLifeCycle(order:Order,
   }
   def update(discardUpdate:DiscardOrder,  log: LoggingAdapter): OrderLifeCycle = {
     if (discard.isDefined) {
-      log.warning(s"This order already happened as discarded ${order.id}"); this
+      log.warning(s"This order already marked as discarded ${order.id}")
     }
     if (delivery.isDefined) {
       log.error(s"This order ${order.id} has been delivered on ${delivery.get.time}, Ignoring discard notice"); this
