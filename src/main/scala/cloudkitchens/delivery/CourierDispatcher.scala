@@ -3,7 +3,7 @@ package cloudkitchens.delivery
 import akka.actor.{Actor, ActorLogging, ActorRef, Stash, Terminated}
 import akka.routing.{ActorRefRoutee, BroadcastRoutingLogic, RoundRobinRoutingLogic, Router}
 import cloudkitchens.kitchen.Kitchen.KitchenReadyForService
-import cloudkitchens.kitchen.PackagedProduct
+import cloudkitchens.storage.PackagedProduct
 
 class CourierDispatcher extends Actor with Stash with ActorLogging {
   import Courier._

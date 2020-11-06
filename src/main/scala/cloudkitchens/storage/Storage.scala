@@ -1,11 +1,11 @@
-package cloudkitchens.kitchen
+package cloudkitchens.storage
 
 import java.time.LocalDateTime
 
 import akka.event.LoggingAdapter
-import cloudkitchens.kitchen.ShelfManager.{DiscardOrder, ExpiredShelfLife, ShelfCapacityExceeded}
-import cloudkitchens.order.{Order, Temperature}
 import cloudkitchens.order.Temperature.All
+import cloudkitchens.order.{Order, Temperature}
+import cloudkitchens.storage.ShelfManager.{DiscardOrder, ExpiredShelfLife, ShelfCapacityExceeded}
 
 import scala.collection.mutable
 
@@ -42,7 +42,7 @@ import scala.collection.mutable
  *   c) While overflow is over capacity: discard the product with the newest order creation timestamp.
  */
 
-private [kitchen] case class Storage(log: LoggingAdapter, shelves: mutable.Map[Temperature, Shelf] = Shelf.temperatureSensitiveShelves) {
+private [storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[Temperature, Shelf] = Shelf.temperatureSensitiveShelves) {
 
   assert(shelves.contains(All), "Overflow shelf not registered")
   assert(tempSensitiveShelves.values.forall(_.decayModifier<=overflow.decayModifier),
@@ -109,7 +109,7 @@ private [kitchen] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
 
 
 
-  private [kitchen] def fetchPackageForOrder(order: Order): Option[PackagedProduct] = shelves.values.flatMap{shelf =>
+  private [storage] def fetchPackageForOrder(order: Order): Option[PackagedProduct] = shelves.values.flatMap{shelf =>
     val packageOption = shelf.getPackageForOrder(order)
     packageOption match {
       case Some(product) => shelf -= product; Some(product.phantomCopy(shelf.decayModifier))
@@ -168,14 +168,9 @@ private [kitchen] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
   private def pairProductsForPotentialSwap():List[ProductPair] = overflow.products.groupBy(_.order.temperature).collect {
     case (temperature, productsInGroup) =>
       val target = shelves(temperature)
-      val overflowDecayModifier = overflow.decayModifier
-      val targetDecayModifier = target.decayModifier
       val p1 = productsInGroup.head
       val p2 = target.lowestValueProduct
-      ProductPair(
-        ExpirationInfo(p1, p1.expirationInMillis(overflowDecayModifier), p1.expirationInMillis(targetDecayModifier), p1.minimalWaitTimeForPickup(),overflow),
-        ExpirationInfo(p2, p2.expirationInMillis(targetDecayModifier), p2.expirationInMillis(overflowDecayModifier), p2.minimalWaitTimeForPickup(),target),
-      )
+      ProductPair(p1,overflow,p2,target)
   }.toList
 
   private def discardProductsThatWillExpireBeforeEarliestPossiblePickup(pairedProducts: List[ProductPair], time:LocalDateTime):List[DiscardOrder] =
@@ -199,8 +194,8 @@ private [kitchen] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
                                         time:LocalDateTime,
                                         criticalZoneThreshold:Int = CriticalTimeThresholdForSwappingInMillis):List[ProductPair] = {
     for (pair <- pairedProducts.filter(pair =>
-      pair.inCriticalZone(criticalZoneThreshold) && pair.recommendedToExchange(criticalZoneThreshold))) yield {
-      moveProductToTargetShelfMaintainingCapacity(pair.overflow, pair.productInOverflow.product, pair.target, time) match {
+      pair.inCriticalZone(criticalZoneThreshold) && pair.swapRecommended(criticalZoneThreshold))) yield {
+      moveProductToTargetShelfMaintainingCapacity(pair.overflow, pair.inOverflow.product, pair.target, time) match {
         case Some(productOnShelf) => pair.overflow += productOnShelf.phantomCopy(overflow.decayModifier, time)
         case None =>
       }

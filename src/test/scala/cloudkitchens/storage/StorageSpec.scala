@@ -1,24 +1,24 @@
-package cloudkitchens.kitchen
+package cloudkitchens.storage
 
 import java.time.LocalDateTime
 
 import akka.event.NoLogging
 import akka.testkit.TestProbe
 import cloudkitchens.BaseSpec
-import cloudkitchens.kitchen.ShelfManager.DiscardOrder
+import cloudkitchens.storage.ShelfManager.DiscardOrder
 
 class StorageSpec extends BaseSpec {
 
 
   "A Shelve" should {
 
-    val orderProcessor = TestProbe(OrderProcessorName)
+    val customer = TestProbe(CustomerName)
     val time = LocalDateTime.now()
 
-    val product1 = samplePackagedProduct(1, orderProcessor.ref, 1000, 0.5f, time)
-    val product2 = samplePackagedProduct(2, orderProcessor.ref, 2000, 0.5f, time)
-    val product3 = samplePackagedProduct(3, orderProcessor.ref, 3000, 0.5f, time)
-    val product4 = samplePackagedProduct(4, orderProcessor.ref, 3000, 0.5f, time)
+    val product1 = samplePackagedProduct(1, customer.ref, 1000, 0.5f, Cold, time)
+    val product2 = samplePackagedProduct(2, customer.ref, 2000, 0.5f, Cold, time)
+    val product3 = samplePackagedProduct(3, customer.ref, 3000, 0.5f, Cold, time)
+    val product4 = samplePackagedProduct(4, customer.ref, 3000, 0.5f, Cold, time)
 
     "store a single product and give it back if asked before it expires" in {
       val shelf = Shelf.cold(3)
@@ -79,11 +79,11 @@ class StorageSpec extends BaseSpec {
 
   "A Storage" should {
 
-    val orderProcessor = TestProbe(OrderProcessorName)
+    val customer = TestProbe(CustomerName)
     val shelves = Storage(NoLogging, Shelf.temperatureSensitiveShelves)
     val time = LocalDateTime.now()
-    val shortLifeProduct = samplePackagedProduct(1, orderProcessor.ref, 1, 0.99f, time)
-    val longLifeProduct = samplePackagedProduct(2, orderProcessor.ref, 1000, 0.5f, time)
+    val shortLifeProduct = samplePackagedProduct(1, customer.ref, 1, 0.99f, Hot, time)
+    val longLifeProduct = samplePackagedProduct(2, customer.ref, 1000, 0.5f, Hot, time)
 
     "store a single product and get it back" in {
       assert(shelves.totalProductsOnShelves == 0)

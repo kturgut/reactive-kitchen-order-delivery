@@ -6,6 +6,7 @@ import akka.actor.{Actor, ActorIdentity, ActorLogging, ActorPath, ActorRef, Iden
 import cloudkitchens.CloudKitchens.ShelfManagerActorName
 import cloudkitchens.{ComponentStatus, JacksonSerializable, NotReadyForService, ReadyForService}
 import cloudkitchens.order.Order
+import cloudkitchens.storage.{PackagedProduct, ShelfManager}
 
 
 object Kitchen {

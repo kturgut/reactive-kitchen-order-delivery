@@ -8,10 +8,11 @@ import cloudkitchens.CloudKitchens.KitchenActorName
 import cloudkitchens.customer.Customer
 import cloudkitchens.delivery.Courier.DeliveryComplete
 import cloudkitchens.delivery.CourierDispatcher
-import cloudkitchens.kitchen.{Kitchen, PackagedProduct}
+import cloudkitchens.kitchen.Kitchen
 import cloudkitchens.{JacksonSerializable, kitchen, system}
 import cloudkitchens.kitchen.Kitchen.KitchenReadyForService
-import cloudkitchens.kitchen.ShelfManager.DiscardOrder
+import cloudkitchens.storage.PackagedProduct
+import cloudkitchens.storage.ShelfManager.DiscardOrder
 
 import scala.collection.immutable.ListMap
 
@@ -23,7 +24,7 @@ case object OrderProcessor {
 
   // EVENTS
   case class OrderRecord(time:LocalDateTime, order:Order)  extends JacksonSerializable
-  case class ProductRecord(time:LocalDateTime, product:kitchen.PackagedProduct)  extends JacksonSerializable
+  case class ProductRecord(time:LocalDateTime, product:PackagedProduct)  extends JacksonSerializable
   case class DeliveryCompleteRecord(time:LocalDateTime, delivery:DeliveryComplete)  extends JacksonSerializable
   case class DiscardOrderRecord(time:LocalDateTime, discard:DiscardOrder)  extends JacksonSerializable
   case class KitchenRelationshipRecord(name:String, actorPath:String) extends JacksonSerializable

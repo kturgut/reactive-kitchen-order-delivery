@@ -5,11 +5,12 @@ import java.time.LocalDateTime
 import akka.event.LoggingAdapter
 import cloudkitchens.delivery.Courier.DeliveryComplete
 import cloudkitchens.kitchen
-import cloudkitchens.kitchen.ShelfManager.DiscardOrder
+import cloudkitchens.storage.ShelfManager.DiscardOrder
 import spray.json.DefaultJsonProtocol.{FloatJsonFormat, IntJsonFormat, StringJsonFormat, jsonFormat5}
 import spray.json.RootJsonFormat
 import Temperature._
 import akka.actor.ActorRef
+import cloudkitchens.storage.PackagedProduct
 
 
 sealed trait Temperature {
@@ -44,7 +45,7 @@ case class Order (id:String,
                   createdOn:LocalDateTime = LocalDateTime.now()
                  ) {
   override def toString: String = s"Order (name:$name, temp:$temp, shelfLife:$shelfLife secs, decayRate:$decayRate, id: $id)"
-  def temperature:Temperature = temp match {
+  def temperature:Temperature = temp.toLowerCase() match {
       case "hot" => Hot
       case "cold" => Cold
       case "frozen" => Frozen
@@ -69,7 +70,7 @@ case class OrderLifeCycle(order:Order,
   def delivered:Boolean = delivery.isDefined
   def discarded:Boolean = discard.isDefined
 
-  def update(productUpdate:kitchen.PackagedProduct, log: LoggingAdapter): OrderLifeCycle = {
+  def update(productUpdate:PackagedProduct, log: LoggingAdapter): OrderLifeCycle = {
     if (product.isDefined) {
       log.warning(s"Product already created for order ${order.id}"); this
     }

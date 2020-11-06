@@ -1,4 +1,4 @@
-package cloudkitchens.kitchen
+package cloudkitchens.storage
 
 import cloudkitchens.BaseSpec
 

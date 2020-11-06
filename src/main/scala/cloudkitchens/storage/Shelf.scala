@@ -1,16 +1,16 @@
-package cloudkitchens.kitchen
+package cloudkitchens.storage
 
 import java.time.{LocalDateTime, ZoneId}
 
 import akka.event.LoggingAdapter
-import cloudkitchens.kitchen.ShelfManager.{DiscardOrder, ExpiredShelfLife, ShelfCapacityExceeded}
 import cloudkitchens.order.Temperature.{All, Cold, Frozen, Hot}
 import cloudkitchens.order.{Order, Temperature}
+import cloudkitchens.storage.ShelfManager.{DiscardOrder, ExpiredShelfLife}
 
 import scala.collection.mutable
 
 
-private [kitchen] case class Shelf(name: String, supports: Seq[Temperature],
+private [storage] case class Shelf(name: String, supports: Seq[Temperature],
                         capacity: Int = 10,
                         decayModifier: Int = 1,
                         var products: mutable.SortedSet[PackagedProduct] = mutable.SortedSet[PackagedProduct]()(PackagedProduct.IncreasingValue)) {
@@ -28,7 +28,7 @@ private [kitchen] case class Shelf(name: String, supports: Seq[Temperature],
   def lowestValueProduct: PackagedProduct = products.head
 
   def +=(elem: PackagedProduct): Shelf = {
-    assert(canAccept(elem.order))
+    assert(canAccept(elem.order), s"Shelf $name cannot accept products that are ${elem.order.temp}")
     products += elem;
     this
   }
@@ -56,7 +56,7 @@ private [kitchen] case class Shelf(name: String, supports: Seq[Temperature],
 
 }
 
-private [kitchen] case object Shelf {
+private [storage] case object Shelf {
   def temperatureSensitiveShelves: mutable.Map[Temperature, Shelf] =
     mutable.Map(All -> overflow(), Hot -> hot(), Cold -> cold(), Frozen -> frozen())
 
@@ -67,27 +67,4 @@ private [kitchen] case object Shelf {
   def frozen(capacity: Int = 10, decayModifier: Int = 1) = Shelf("Frozen", Frozen :: Nil, capacity, decayModifier)
 
   def overflow(capacity: Int = 15, decayModifier: Int = 2) = Shelf("Overflow", All :: Hot :: Cold :: Frozen :: Nil, capacity, decayModifier)
-}
-
-case class ExpirationInfo(product:PackagedProduct, ifInCurrrentShelf:Long, ifMovedToTarget:Long, timeInMillisTillPickup:(Long,Long), shelf:Shelf) {
-  def willExpireForSure(millisIntoFuture:Long):Boolean = ((ifInCurrrentShelf - millisIntoFuture) < timeInMillisTillPickup._1  && (ifMovedToTarget - millisIntoFuture) < timeInMillisTillPickup._1)
-
-}
-case class ProductPair(productInOverflow:ExpirationInfo, productInTarget:ExpirationInfo) {
-
-  def willExpireForSure(millisIntoFuture:Long):Option[(Shelf,PackagedProduct)] = {
-    if (productInOverflow.willExpireForSure(millisIntoFuture)) Some((overflow, productInOverflow.product))
-    else if (productInTarget.willExpireForSure(millisIntoFuture)) Some(target,productInTarget.product)
-    else None
-  }
-  def recommendedToExchange(threshold:Int):Boolean =
-    willExpireForSure(threshold).isEmpty &&
-      (productInOverflow.ifMovedToTarget + productInTarget.ifMovedToTarget) > (productInOverflow.ifInCurrrentShelf + productInTarget.ifInCurrrentShelf) &&
-      target.canAccept(productInOverflow.product.order) && overflow.canAccept(productInTarget.product.order)
-
-  def inCriticalZone(threshold:Int):Boolean
-    = productInOverflow.willExpireForSure(threshold) || productInTarget.willExpireForSure(threshold)
-
-  def overflow:Shelf = productInOverflow.shelf
-  def target:Shelf = productInTarget.shelf
 }

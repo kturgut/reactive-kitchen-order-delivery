@@ -5,15 +5,18 @@ import java.time.{Duration, LocalDateTime}
 import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props}
 import akka.util.Timeout
 import cloudkitchens.JacksonSerializable
-import cloudkitchens.kitchen.PackagedProduct
-import cloudkitchens.kitchen.ShelfManager.DiscardOrder
+import cloudkitchens.storage.ShelfManager.DiscardOrder
 import cloudkitchens.order.Order
+import cloudkitchens.storage.PackagedProduct
 import org.scalatest.time.SpanSugar.convertFloatToGrainOfTime
 
 import scala.concurrent.duration.DurationInt
 import scala.util.{Failure, Success}
 
 object Courier {
+
+  val DeliveryTimeWindowSizeInSeconds = 4
+  val EarliestDeliveryAfterOrderReceivedInSeconds = 2
 
   case class CourierAssignment(order:Order,
                                courierName:String, courierRef:ActorRef, createdOn:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
@@ -104,7 +107,7 @@ class Courier(name:String,orderProcessor:ActorRef, shelfManager:ActorRef) extend
   }
 
   def reminderToDeliver(courierActorRefToRemind:ActorRef):Cancellable = {
-    val delay = randomizer.nextFloat() * 4 + 2
+    val delay = randomizer.nextFloat() * DeliveryTimeWindowSizeInSeconds + EarliestDeliveryAfterOrderReceivedInSeconds
     context.system.scheduler.scheduleOnce(delay seconds) {
       courierActorRefToRemind ! DeliverNow
     }
