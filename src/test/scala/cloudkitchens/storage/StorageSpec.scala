@@ -1,13 +1,18 @@
 package cloudkitchens.storage
 
 import java.time.LocalDateTime
+import java.time.temporal.ChronoUnit
 
 import akka.event.NoLogging
 import akka.testkit.TestProbe
 import cloudkitchens.BaseSpec
+import cloudkitchens.order.Temperature
+import cloudkitchens.storage.PackagedProduct.dateFormatter
 import cloudkitchens.storage.ShelfManager.DiscardOrder
 
-class StorageSpec extends BaseSpec {
+import scala.collection.mutable
+
+class StorageSpec extends BaseSpec with StorageHelper {
 
 
   "A Shelve" should {
@@ -122,15 +127,74 @@ class StorageSpec extends BaseSpec {
     }
 
     "should not return the wrong product" in {
-        shelves.putPackageOnShelf(shortLifeProduct)
-        Thread.sleep(500)
-        assert(shelves.totalProductsOnShelves == 1)
-        assert(shortLifeProduct.order != longLifeProduct.order)
-        shelves.pickupPackageForOrder(longLifeProduct.order) match {
-          case Left(Some(_)) => fail("Should not have found the product")
-          case Left(None) => "Test Passed!"
-          case Right(_: DiscardOrder) => fail("Wrong expired product ")
-        }
+      shelves.putPackageOnShelf(shortLifeProduct)
+      Thread.sleep(500)
+      assert(shelves.totalProductsOnShelves == 1)
+      assert(shortLifeProduct.order != longLifeProduct.order)
+      shelves.pickupPackageForOrder(longLifeProduct.order) match {
+        case Left(Some(_)) => fail("Should not have found the product")
+        case Left(None) => "Test Passed!"
+        case Right(_: DiscardOrder) => fail("Wrong expired product ")
       }
     }
+
+    "should be able to age products on its shelves over time.. without optimization kicking in" in {
+      val hot = Shelf.hot(3)
+      val overflow = Shelf.overflow(4)
+      var storage = Storage(NoLogging, mutable.Map(Temperature.Hot -> hot, Temperature.All -> overflow))
+      val hots: IndexedSeq[PackagedProduct] = for (i <- 0 until 5) yield {
+        samplePackagedProduct(i, customer.ref, i, 0.5f, Hot, time)
+      }
+      hots.foreach(product => storage.putPackageOnShelf(product, product.createdOn))
+
+      val actual = (for (timeIncrement <- 0 to 1000 by 500) yield {
+        storage = storage.snapshot(time.plus(timeIncrement, ChronoUnit.MILLIS))
+        report(storage)
+        timeIncrement -> collectStorageData(storage)
+      }).toMap
+      val expected = {
+        Map(
+          0 -> Map(Temperature.Hot -> List(("0", 0.0f, 1.0f), ("1", 1.0f, 1.0f), ("2", 2.0f, 1.0f)), Temperature.All -> List(("3", 3.0f, 1.0f), ("4", 4.0f, 1.0f))),
+          500 -> Map(Temperature.Hot -> List(("0", 0.0f, 0.0f), ("1", 0.25f, 0.25f), ("2", 1.25f, 0.625f)), Temperature.All -> List(("3", 2.0f, 0.6666667f), ("4", 3.0f, 0.75f))),
+          1000 -> Map(Temperature.Hot -> List(("0", 0.0f, 0.0f), ("1", 0.0f, 0.0f), ("2", 0.5f, 0.25f)), Temperature.All -> List(("3", 1.0f, 0.33333334f), ("4", 2.0f, 0.5f)))
+        )
+      }
+      assert(actual == expected)
+    }
+
+    "should not overflow" in {
+      val hot = Shelf.hot(3)
+      val overflow = Shelf.overflow(4)
+      var storage = Storage(NoLogging, mutable.Map(Temperature.Hot -> hot, Temperature.All -> overflow))
+      val hots: IndexedSeq[PackagedProduct] = for (i <- 0 until 10) yield {
+        samplePackagedProduct(i, customer.ref, i, 0.5f, Hot, time.plus(i * 10, ChronoUnit.MILLIS))
+      }
+      hots.foreach{product => storage.putPackageOnShelf(product, product.createdOn)}
+      assert(!overflow.hasAvailableSpace)
+      assert(!overflow.overCapacity)
+    }
+
+
+  }
+}
+
+trait StorageHelper {
+
+  def collectStorageData(storage: Storage): Map[Temperature, List[(String, Float, Float)]] =
+    storage.shelves.map(shelf => shelf._1 -> collectShelfData(shelf._2)).toMap
+
+  def collectShelfData(shelf: Shelf): List[(String, Float, Float)] =
+    shelf.products.map(p => (p.order.id, p.remainingShelfLife, p.value)).toList
+
+  def report(storage: Storage, verbose:Boolean=false): Unit = {
+    def print(shelf: Shelf): Unit = {
+      println(s"${shelf.name} shelf capacity utilization:${shelf.products.size} / ${shelf.capacity}, decay rate modifier:${shelf.decayModifier} createdOn: ${storage.createdOn.format(dateFormatter)}")
+      if (verbose)
+        println(s"       contents: ${shelf.products.map(product=>(product.order.id, product.order.shelfLife, product.order.name,product.value, product.createdOn.format(dateFormatter))).mkString(",")}")
+      else
+        println(s"       contents: ${shelf.products.map(product => (product.order.id, product.remainingShelfLife, product.value)).mkString(",")}")
+    }
+    println
+    storage.shelves.values.foreach(print)
+  }
 }

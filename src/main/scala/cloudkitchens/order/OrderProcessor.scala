@@ -2,7 +2,7 @@ package cloudkitchens.order
 
 import java.time.LocalDateTime
 
-import akka.actor.{ActorIdentity, ActorLogging, ActorRef, Identify, Props}
+import akka.actor.{ActorIdentity, ActorLogging, ActorPath, ActorRef, Identify, Props}
 import akka.persistence.{PersistentActor, RecoveryCompleted}
 import cloudkitchens.CloudKitchens.KitchenActorName
 import cloudkitchens.customer.Customer

@@ -7,14 +7,11 @@ import java.time.{Duration, LocalDateTime}
 import cloudkitchens.delivery.Courier
 import cloudkitchens.order.{Order, Temperature}
 
-case class PackagedProduct(remainingShelfLife:Float, value:Float, createdOn:LocalDateTime, updatedOn:LocalDateTime, order:Order) {
+final case class PackagedProduct(remainingShelfLife:Float, value:Float, createdOn:LocalDateTime, updatedOn:LocalDateTime, order:Order) {
   import PackagedProduct._
   override def toString() = s"Product (name:${order.name}, temp:${order.temp}, remainingShelfLife:$remainingShelfLife, value:$value, " +
     s"createdOn:${createdOn.format(dateFormatter)}, lastUpdatedOn:${updatedOn.format(dateFormatter)}, orderId:${order.id})"
   def prettyString = s"Product (${order.name} temp:${order.temp} remainingShelfLife:$remainingShelfLife, value:$value)"
-
-  implicit val ordering = PackagedProduct.IncreasingValue
-  val MillliSecondsInOneSecond = 1000
 
   /**
    *  Creates a copy of the packaged product representing the updated state in time assuming it stayed in
@@ -23,9 +20,12 @@ case class PackagedProduct(remainingShelfLife:Float, value:Float, createdOn:Loca
    */
   def phantomCopy(shelfDecayModifier:Float, current:LocalDateTime = LocalDateTime.now()):PackagedProduct = {
     val duration = ChronoUnit.MILLIS.between(updatedOn,current).toFloat / MillliSecondsInOneSecond
-    val remainingLife = math.max(0,if (remainingShelfLife <=0) 0 else (remainingShelfLife - duration - order.decayRate * duration * shelfDecayModifier))
-    val newValue = math.max(0,if (order.shelfLife<=0) 0f else remainingLife.toFloat / order.shelfLife)
-    copy(remainingLife, newValue, createdOn, current, order:Order)
+    if (duration > 0 ) {
+      val remainingLife = math.max(0,if (remainingShelfLife <=0) 0 else (remainingShelfLife - duration - order.decayRate * duration * shelfDecayModifier))
+      val newValue = math.max(0,if (order.shelfLife<=0) 0f else remainingLife.toFloat / order.shelfLife)
+      copy(remainingLife, newValue, createdOn, current, order:Order)
+    }
+    else this
   }
 
   def expirationInMillis(shelfDecayModifier:Float):Long = {
@@ -38,7 +38,6 @@ case class PackagedProduct(remainingShelfLife:Float, value:Float, createdOn:Loca
       newValue = math.max(0,if (order.shelfLife<=0) 0f else remainingLife.toFloat / order.shelfLife)
       futureTime = futureTime.plus(incrementInMillis, ChronoUnit.MILLIS )
     }
-    assert(Duration.between(updatedOn,futureTime).toMillis < remainingShelfLife * 1000)
     Duration.between(updatedOn,futureTime).toMillis
   }
 
@@ -55,6 +54,8 @@ case class PackagedProduct(remainingShelfLife:Float, value:Float, createdOn:Loca
 case object PackagedProduct{
 
   val dateFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+  implicit val ordering = PackagedProduct.IncreasingValue
+  val MillliSecondsInOneSecond = 1000
 
     object IncreasingValue extends Ordering[PackagedProduct] {
     def compare(a:PackagedProduct, b:PackagedProduct):Int =
@@ -95,7 +96,7 @@ private [storage] case class ProductPair(inOverflow:ExpirationInfo, inTarget:Exp
   /**
    * Returns whether it is recommended to swap the products to ensure either one of the products will improve
    * its shelf life if moved while not putting the other at risk of being in "critical zone" identified by threshold.
-   * Not that this will return false if either of these products will expireForSure.
+   * Note that this will return false if either of these products will expireForSure.
    */
   def swapRecommended(threshold:Int):Boolean = inOverflow.wantsToMove(threshold) && inTarget.okToMove(threshold) ||
                                                inTarget.wantsToMove(threshold) && inOverflow.okToMove(threshold)
@@ -104,8 +105,7 @@ private [storage] case class ProductPair(inOverflow:ExpirationInfo, inTarget:Exp
   /**
    *  Returns true if either of the products will expire for sure if not moved within a certain time frame 'threshold'
    */
-  def inCriticalZone(threshold:Int):Boolean
-  = inOverflow.willExpireForSure(threshold) || inTarget.willExpireForSure(threshold)
+  def inCriticalZone(threshold:Int):Boolean = inOverflow.willExpireForSure(threshold) || inTarget.willExpireForSure(threshold)
 
   def overflow:Shelf = inOverflow.shelf
   def target:Shelf = inTarget.shelf

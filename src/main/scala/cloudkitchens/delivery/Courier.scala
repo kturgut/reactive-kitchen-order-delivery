@@ -36,7 +36,7 @@ object Courier {
   case class DeliveryComplete(assignment:CourierAssignment, product:PackagedProduct, acceptance:DeliveryAcceptance, time:LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
     def durationOrderToDeliveryInSeconds: Float = Duration.between(product.createdOn, acceptance.time).toMillis.toFloat/1000
     def prettyString(): String = s"DeliveryComplete of product '${assignment.order.name} in " + f"$durationOrderToDeliveryInSeconds%1.2f" +
-                                  s" seconds. Value delivered:${product.value}. Tip received:${acceptance.tips}."
+                                  s" seconds. Value delivered:${product.value}. Tip received:${acceptance.tips}. Order id: ${assignment.order.id}"
   }
 
   case class OnAssignment(courier:ActorRef)

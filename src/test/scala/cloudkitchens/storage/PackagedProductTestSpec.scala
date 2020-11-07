@@ -19,6 +19,16 @@ class PackagedProductTestSpec extends BaseSpec {
        assert(phantom.updatedOn == timeInFuture)
      }
 
+     "be able to create a copy of itself back in time not supported, should not change current value and remainingLife" in {
+       val timeInFuture = time.plusSeconds(-2)
+       val phantom = product.phantomCopy(2, timeInFuture)
+       assert(phantom.createdOn == phantom.createdOn)
+       assert(phantom.updatedOn == product.updatedOn)
+       assert(phantom.remainingShelfLife == product.remainingShelfLife)
+       assert(phantom.value == product.value)
+     }
+
+
      "value should deprecate over time based on decayRate and shelf decayModifier" in {
        val actual = for (secondsIntoFuture <- 0 until 10)
          yield {
@@ -37,13 +47,13 @@ class PackagedProductTestSpec extends BaseSpec {
      }
 
      "compute value properly if shelf life is not positive" in {
-       val expiredProduct = samplePackagedProduct(1, orderProcessor.ref, 0, 0.5f)
-       val actual1 = for (secondsIntoFuture <- 0 until 5) yield expiredProduct.phantomCopy(1, time.plusSeconds(secondsIntoFuture)).value
-       val expected = List(0f, 0f, 0f, 0f, 0f)
+       val expiredProduct = samplePackagedProduct(1, orderProcessor.ref, 0, 0.5f,Hot,time)
+       val actual1 = for (secondsIntoFuture <- (-1) until 5) yield expiredProduct.phantomCopy(1, time.plusSeconds(secondsIntoFuture)).value
+       val expected = List(1f, 1f, 0f, 0f, 0f, 0f)
        assert(actual1 == expected)
 
-       val invalidProduct = samplePackagedProduct(1, orderProcessor.ref, -1, 0.5f)
-       val actual2 = for (secondsIntoFuture <- 0 until 5) yield invalidProduct.phantomCopy(1, time.plusSeconds(secondsIntoFuture)).value
+       val invalidProduct = samplePackagedProduct(1, orderProcessor.ref, -1, 0.5f,Hot,time)
+       val actual2 = for (secondsIntoFuture <- (-1) until 5) yield invalidProduct.phantomCopy(1, time.plusSeconds(secondsIntoFuture)).value
        assert(actual2 == expected)
      }
 

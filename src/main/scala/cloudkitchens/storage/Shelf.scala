@@ -14,6 +14,7 @@ private [storage] case class Shelf(name: String, supports: Seq[Temperature],
                         capacity: Int = 10,
                         decayModifier: Int = 1,
                         var products: mutable.SortedSet[PackagedProduct] = mutable.SortedSet[PackagedProduct]()(PackagedProduct.IncreasingValue)) {
+  import Shelf._
 
   def size:Int = products.size
 
@@ -46,17 +47,24 @@ private [storage] case class Shelf(name: String, supports: Seq[Temperature],
     discarded.toSeq
   }
 
-  implicit val localDateTimeOrdering: Ordering[LocalDateTime] = Ordering.by(x => x.atZone(ZoneId.of("UTC")).toEpochSecond)
-  def productsOrderedByOrderDate:List[PackagedProduct] = products.toList.sortBy(_.order.createdOn)(localDateTimeOrdering)
+  def productsDecreasingByOrderDate:List[PackagedProduct] = products.toList.sortBy(_.order.createdOn)(localDateTimeOrdering).reverse // TODO fix ordering to reverse
 
   def reportContents(log:LoggingAdapter, verbose:Boolean=false): Unit = {
     log.info(s"$name shelf capacity utilization:${products.size} / $capacity, decay rate modifier:$decayModifier.")
     if (verbose) log.info(s"       contents: ${products.map(product=>(product.order.name,product.value)).mkString(",")}")
   }
 
+  def refresh(time:LocalDateTime):Shelf = {
+    products = products.map(_.phantomCopy(decayModifier,time))
+    this
+  }
+
 }
 
 private [storage] case object Shelf {
+
+  implicit val localDateTimeOrdering: Ordering[LocalDateTime] = Ordering.by(x => x.atZone(ZoneId.of("UTC")).toEpochSecond)
+
   def temperatureSensitiveShelves: mutable.Map[Temperature, Shelf] =
     mutable.Map(All -> overflow(), Hot -> hot(), Cold -> cold(), Frozen -> frozen())
 

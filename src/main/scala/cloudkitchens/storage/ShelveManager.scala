@@ -5,7 +5,7 @@ import java.time.LocalDateTime
 import akka.actor.{Actor, ActorLogging, ActorRef, Props, Timers}
 import cloudkitchens.JacksonSerializable
 import cloudkitchens.delivery.Courier.{CourierAssignment, Pickup, PickupRequest}
-import cloudkitchens.order.Order
+import cloudkitchens.order.{Order, Temperature}
 
 import scala.collection.immutable.ListMap
 import scala.concurrent.duration.DurationInt
@@ -51,14 +51,14 @@ class ShelfManager(orderProcessorOption: Option[ActorRef] = None) extends Actor 
 
     case ManageProductsOnShelves =>
       val updatedAssignments = publishDiscardedOrders(storage.optimizeShelfPlacement(), courierAssignments)
-      if (!storage.hasAvailableSpace)
+      if (storage.isOverflowFull())
         storage.reportStatus(true)
-      context.become(readyForService(updatedAssignments, storage.copy()))
+      context.become(readyForService(updatedAssignments, storage.snapshot()))
 
     case product: PackagedProduct =>
       log.debug(s"Putting new product ${product.prettyString} on shelf")
       val updatedAssignments = publishDiscardedOrders(storage.putPackageOnShelf(product), courierAssignments)
-      context.become(readyForService(updatedAssignments, storage.copy()))
+      context.become(readyForService(updatedAssignments, storage.snapshot()))
 
     // If product found and not expired return it, else if expired return discard order instead and notify order processor
     case pickupRequest: PickupRequest =>
@@ -70,7 +70,7 @@ class ShelfManager(orderProcessorOption: Option[ActorRef] = None) extends Actor 
           orderProcessorOption.foreach(_ ! discardOrder)
           sender() ! discardOrder
       }
-      context.become(readyForService(courierAssignments, storage.copy()))
+      context.become(readyForService(courierAssignments, storage.snapshot()))
 
     case assignment: CourierAssignment =>
       log.debug(s"Shelf manager received assignment: ${assignment.prettyString}")

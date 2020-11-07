@@ -27,7 +27,7 @@ import scala.collection.mutable
  * 6- All new products received are put into Overflow shelf first.
  * 7- Shelf optimization is done a) when new products are added to Storage b) periodically on schedule (currently every second)
  * 7- Couriers are expected to arrive between 2 to 6 seconds after they receive assignment for an order.
-
+ *
  *
  * Overflow Shelf Optimization
  * 1- Remove expired products on all shelves
@@ -35,25 +35,30 @@ import scala.collection.mutable
  * while there is capacity on those shelves
  * Note: Current implementation assumes single "target" shelf for each temperature
  * 3- If overflow shelf is full
- *   a) Expire products that will not be be deliverable based on minimum expected pickup time (using the 2 second minimum delay)
+ * a) Expire products that will not be be deliverable based on minimum expected pickup time (using the 2 second minimum delay)
  * ShelfOptimization
- *   b) Replace products that can benefit with increased shelf life if swapped by a product in target shelf.
- *   This is controlled by CRITICAL_TIME_THRESHOLD
- *   c) While overflow is over capacity: discard the product with the newest order creation timestamp.
+ * b) Replace products that can benefit with increased shelf life if swapped by a product in target shelf.
+ * This is controlled by CRITICAL_TIME_THRESHOLD
+ * c) While overflow is over capacity: discard the product with the newest order creation timestamp.
  */
 
-private [storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[Temperature, Shelf] = Shelf.temperatureSensitiveShelves) {
+private[storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[Temperature, Shelf] = Shelf.temperatureSensitiveShelves, createdOn:LocalDateTime=LocalDateTime.now()) {
 
   assert(shelves.contains(All), "Overflow shelf not registered")
-  assert(tempSensitiveShelves.values.forall(_.decayModifier<=overflow.decayModifier),
+  assert(tempSensitiveShelves.values.forall(_.decayModifier <= overflow.decayModifier),
     "Overflow shelf decayRate modifier is assumed to be higher or equal to other shelves'")
 
   private lazy val overflow: Shelf = shelves(All)
   private lazy val tempSensitiveShelves: mutable.Map[Temperature, Shelf] = shelves - All
 
-  def totalProductsOnShelves:Int = shelves.values.map(_.size).sum
-  lazy val totalCapacity= shelves.map(_._2.capacity).sum
-  def hasAvailableSpace: Boolean = shelves.values.find(_.hasAvailableSpace).isDefined
+  def totalProductsOnShelves: Int = shelves.values.map(_.size).sum
+
+  lazy val totalCapacity = shelves.map(_._2.capacity).sum
+
+
+  def isOverflowFull() = !hasAvailableSpaceFor(Temperature.All)
+  def hasAvailableSpaceFor(temperature: Temperature) =
+    shelves.values.filter(shelf=>shelf.supports.contains(temperature)).find(_.hasAvailableSpace).isDefined
 
   val CriticalTimeThresholdForSwappingInMillis = 2000
 
@@ -62,6 +67,7 @@ private [storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
    * Initially the incoming package is put into overflow, and then overflow contents are pushed up as needed as part of
    * shelf optimization.
    * Return orders for existing packages to be dropped due to expiration or lack of space.
+   *
    * @param product
    * @param time
    * @return
@@ -77,10 +83,12 @@ private [storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
    * Pick up packaged product for an order.
    * Returns "Either" found package option on the left, or a discarded order on the right
    * If product is not found it will be returned as "None" on the Either.left
+   *
    * @param order
    * @return
    */
-  def pickupPackageForOrder(order:Order):Either[Option[PackagedProduct], DiscardOrder] =
+  def pickupPackageForOrder(order: Order, time: LocalDateTime = LocalDateTime.now()): Either[Option[PackagedProduct], DiscardOrder] = {
+    refresh(time)
     fetchPackageForOrder(order) match {
       case Some(packagedProduct) =>
         if (packagedProduct.value > 0)
@@ -88,6 +96,7 @@ private [storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
         else Right(DiscardOrder(packagedProduct.order, ExpiredShelfLife, packagedProduct.updatedOn))
       case None => Left(None)
     }
+  }
 
   /**
    * Since each shelf has different decayRateModifier constant and capacity, packages on shelves are shuffled to extend
@@ -104,17 +113,26 @@ private [storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
    * @param time
    * @return
    */
-  def optimizeShelfPlacement(time: LocalDateTime = LocalDateTime.now()): Iterable[DiscardOrder] =
+  def optimizeShelfPlacement(time: LocalDateTime = LocalDateTime.now()): Iterable[DiscardOrder] = {
+    refresh(time)
     shelves.values.flatMap(_.expireEndOfLifeProducts(time)) ++ optimizeOverflowShelf(time)
+  }
+
+  /** create a snapshot copy in time.
+   */
+  def snapshot(time: LocalDateTime = LocalDateTime.now()): Storage = {
+    refresh(time)
+    copy(log,shelves.clone(),time)
+  }
 
 
-
-  private [storage] def fetchPackageForOrder(order: Order): Option[PackagedProduct] = shelves.values.flatMap{shelf =>
+  private[storage] def fetchPackageForOrder(order: Order): Option[PackagedProduct] = shelves.values.flatMap { shelf =>
     val packageOption = shelf.getPackageForOrder(order)
     packageOption match {
-      case Some(product) => shelf -= product; Some(product.phantomCopy(shelf.decayModifier))
+      case Some(product) => shelf -= product; Some(product)
       case _ => None
-    }}.toList.headOption
+    }
+  }.toList.headOption
 
 
   /**
@@ -123,30 +141,30 @@ private [storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
    *
    * 2- If overflow shelf is full:
    *
-   *    a) Create pairings of products in overflow shelf with products with lowest remaining "value".
-   *    This pairing represents the likely product that would come down to overflow shelf if the product in overflow is
-   *    pushed to target shelf.
-   *    Value of a product is calculated by dividing "remainingShelfLife" of a product to original "shelfLife"
-   *    Note that as products are moved around in storage, a copy of the product is created with updated
-   *    "remainingShelfLife" and "value".
+   * a) Create pairings of products in overflow shelf with products with lowest remaining "value".
+   * This pairing represents the likely product that would come down to overflow shelf if the product in overflow is
+   * pushed to target shelf.
+   * Value of a product is calculated by dividing "remainingShelfLife" of a product to original "shelfLife"
+   * Note that as products are moved around in storage, a copy of the product is created with updated
+   * "remainingShelfLife" and "value".
    *
-   *    b) Discard products that will expire before their earliest possible pickup time using the pairings created in 2-a
-   *    This is calculated using the assumption that there is a 2 second minimum delay between creation of an order
-   *    and the earliest expected time it will be picked up. Based on current order data, this is an edge case which may
-   *    happen due to delays in communication between StorageManager, and Courier, or Kitchen.
-   *    TODO: use the courierAssignment maintained in StorageManager for expected arrival time of courier for better accuracy
-   *    Also though not supported now, in real life couriers may actually get delayed for traffic or other reasons,
-   *    or a courier may be cancelled and another might be assigned by CourierManager. In such scenarios the expected
-   *    time of courier pickup may be updated.
+   * b) Discard products that will expire before their earliest possible pickup time using the pairings created in 2-a
+   * This is calculated using the assumption that there is a 2 second minimum delay between creation of an order
+   * and the earliest expected time it will be picked up. Based on current order data, this is an edge case which may
+   * happen due to delays in communication between StorageManager, and Courier, or Kitchen.
+   * TODO: use the courierAssignment maintained in StorageManager for expected arrival time of courier for better accuracy
+   * Also though not supported now, in real life couriers may actually get delayed for traffic or other reasons,
+   * or a courier may be cancelled and another might be assigned by CourierManager. In such scenarios the expected
+   * time of courier pickup may be updated.
    *
-   *    c) Move products in "critical time zone" in overflow shelf to target shelves, essentially swapping them
-   *    with the lowest "value" product in target, if such swap would extend the total shelf life of those products.
-   *    Critical zone threshold is currently set as constant: 2 seconds. Best value for such threshold TBD.
-   *    Why not keep higher threshold? To reduce the amount of swapping unless necessary for practical reasons.
+   * c) Move products in "critical time zone" in overflow shelf to target shelves, essentially swapping them
+   * with the lowest "value" product in target, if such swap would extend the total shelf life of those products.
+   * Critical zone threshold is currently set as constant: 2 seconds. Best value for such threshold TBD.
+   * Why not keep higher threshold? To reduce the amount of swapping unless necessary for practical reasons.
    *
-   *    d) While overflow is over capacity: discard products with the newest order timestamp.
-   *    This is is to ensure customers are notified as soon as possible when an order is not going to get delivered,
-   *    and also reduce unnecessary processing in Kitchen and by Couriers.
+   * d) While overflow is over capacity: discard products with the newest order timestamp.
+   * This is is to ensure customers are notified as soon as possible when an order is not going to get delivered,
+   * and also reduce unnecessary processing in Kitchen and by Couriers.
    *
    * @param time
    * @return
@@ -155,26 +173,28 @@ private [storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
     var discarded: List[DiscardOrder] = Nil
     moveProductsToEmptySpacesInTemperatureSensitiveShelves(time)
     if (overflow.overCapacity) {
-      var productPairs:List[ProductPair] = pairProductsForPotentialSwap()
+      var productPairs: List[ProductPair] = pairProductsForPotentialSwap()
       discarded = discardProductsThatWillExpireBeforeEarliestPossiblePickup(productPairs, time)
       productPairs = swapPairsOfProductsInCriticalZone(productPairs, time, CriticalTimeThresholdForSwappingInMillis)
       while (overflow.overCapacity) {
-        discarded = discardDueToOverCapacity(overflow.productsOrderedByOrderDate.head, overflow, time) :: discarded
+        discarded = discardDueToOverCapacity(overflow.productsDecreasingByOrderDate.head, overflow, time) :: discarded
       }
     }
     discarded
   }
 
-  private def pairProductsForPotentialSwap():List[ProductPair] = overflow.products.groupBy(_.order.temperature).collect {
+  private def pairProductsForPotentialSwap(): List[ProductPair] = overflow.products.groupBy(_.order.temperature).collect {
     case (temperature, productsInGroup) =>
       val target = shelves(temperature)
       val p1 = productsInGroup.head
       val p2 = target.lowestValueProduct
-      ProductPair(p1,overflow,p2,target)
+      ProductPair(p1, overflow, p2, target)
   }.toList
 
-  private def discardProductsThatWillExpireBeforeEarliestPossiblePickup(pairedProducts: List[ProductPair], time:LocalDateTime):List[DiscardOrder] =
-    for (x <- pairedProducts.flatMap(_.willExpireForSure(0))) yield {discardDueToOverCapacity(x._2,x._1,time)}
+  private def discardProductsThatWillExpireBeforeEarliestPossiblePickup(pairedProducts: List[ProductPair], time: LocalDateTime): List[DiscardOrder] =
+    for (x <- pairedProducts.flatMap(_.willExpireForSure(0))) yield {
+      discardDueToOverCapacity(x._2, x._1, time)
+    }
 
 
   private def discardDueToOverCapacity(product: PackagedProduct, shelf: Shelf, time: LocalDateTime): DiscardOrder = {
@@ -191,8 +211,8 @@ private [storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
     }
 
   private def swapPairsOfProductsInCriticalZone(pairedProducts: List[ProductPair],
-                                        time:LocalDateTime,
-                                        criticalZoneThreshold:Int = CriticalTimeThresholdForSwappingInMillis):List[ProductPair] = {
+                                                time: LocalDateTime,
+                                                criticalZoneThreshold: Int = CriticalTimeThresholdForSwappingInMillis): List[ProductPair] = {
     for (pair <- pairedProducts.filter(pair =>
       pair.inCriticalZone(criticalZoneThreshold) && pair.swapRecommended(criticalZoneThreshold))) yield {
       moveProductToTargetShelfMaintainingCapacity(pair.overflow, pair.inOverflow.product, pair.target, time) match {
@@ -204,7 +224,8 @@ private [storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
   }
 
   private def moveProductToTargetShelfMaintainingCapacity(source: Shelf,
-                                                  product: PackagedProduct, target: Shelf, time: LocalDateTime): Option[PackagedProduct] = {
+                                                          product: PackagedProduct, target: Shelf,
+                                                          time: LocalDateTime): Option[PackagedProduct] = {
     val updatedProduct = product.phantomCopy(source.decayModifier, time)
     log.debug(s"Moving ${product.prettyString} from ${source.name} to ${target.name}  ")
     target.products += updatedProduct
@@ -217,18 +238,22 @@ private [storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[T
       None
   }
 
-  def reportStatus(verbose:Boolean=false): Unit = {
-    log.info(s">> Storage capacity utilization: ${this.totalProductsOnShelves}/${this.totalCapacity} ")
+  def reportStatus(verbose: Boolean = false, time:LocalDateTime=LocalDateTime.now()): Unit = {
+    refresh(time)
+    log.info(s">> Storage capacity utilization: ${this.totalProductsOnShelves}/${this.totalCapacity}, last refreshed:$createdOn")
     if (verbose) {
-      shelves.values.foreach(_.reportContents(log,verbose))
+      shelves.values.foreach(_.reportContents(log, verbose))
     }
     else {
       overflow.products.groupBy(_.order.temperature).foreach {
         case (temperature, productsInGroup) =>
           log.debug(s"   $temperature -> $productsInGroup")
-          shelves.values.foreach(_.reportContents(log,verbose))
+          shelves.values.foreach(_.reportContents(log, verbose))
       }
     }
   }
+
+  private def refresh(time:LocalDateTime=LocalDateTime.now()):Unit = shelves.values.foreach(_.refresh(time))
+
 
 }
