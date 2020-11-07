@@ -57,8 +57,6 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
 
   override def receive:Receive = closedForService(Map())
 
-  import system.dispatcher
-
   def closedForService(components:Map[String,ActorRef]):Receive = {
     case Initialize =>
       log.info(s"Initializing $CloudKitchensActorName")
@@ -97,6 +95,7 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
 
   }
 
+  import system.dispatcher
   def runSimulation (components:Map[String,ActorRef], shelfLifeMultiplier: Float, numberOfOrdersPerSecond:Int ) = {
     system.scheduler.scheduleOnce(100 milliseconds) {
       log.info(s"Starting Order Simulation with components: [${components.keys.mkString(",")}]")
@@ -108,16 +107,6 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
     }
   }
 
-  def createTimeoutWindow():Cancellable = {
-    context.system.scheduler.scheduleOnce(2 seconds) {
-      self ! Shutdown
-    }
-  }
-  def checkInitializationComplete():Cancellable = { // TODO shutdown when no activity
-    context.system.scheduler.scheduleOnce(2 seconds) {
-      self ! Shutdown
-    }
-  }
 
   def startComponent(name:String, components: Map[String,ActorRef]): Unit = {
     assert(componentNames.contains(name), s"Unknown component name:$name")

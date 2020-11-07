@@ -46,7 +46,7 @@ class ShelfManager(orderProcessorOption: Option[ActorRef] = None) extends Actor 
       timers.startTimerWithFixedDelay(TimerKey, ManageProductsOnShelves, 1 second)
 
     case StopAutomaticShelfLifeOptimization =>
-      log.warning("Stopping Automatic Shellf Life Optimization")
+      log.warning("Stopping Automatic Shelf Life Optimization")
       timers.cancel(TimerKey)
 
     case ManageProductsOnShelves =>

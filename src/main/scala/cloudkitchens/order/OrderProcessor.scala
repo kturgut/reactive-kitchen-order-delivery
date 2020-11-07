@@ -2,19 +2,20 @@ package cloudkitchens.order
 
 import java.time.LocalDateTime
 
-import akka.actor.{ActorIdentity, ActorLogging, ActorPath, ActorRef, Identify, Props}
+import akka.actor.{ActorIdentity, ActorLogging, ActorPath, ActorRef, Cancellable, Identify, Props}
 import akka.persistence.{PersistentActor, RecoveryCompleted}
-import cloudkitchens.CloudKitchens.KitchenActorName
+import cloudkitchens.CloudKitchens.{KitchenActorName, OrderProcessorActorName}
 import cloudkitchens.customer.Customer
 import cloudkitchens.delivery.Courier.DeliveryComplete
 import cloudkitchens.delivery.CourierDispatcher
 import cloudkitchens.kitchen.Kitchen
-import cloudkitchens.{JacksonSerializable, kitchen, system}
+import cloudkitchens.{CloudKitchens, JacksonSerializable, kitchen, system}
 import cloudkitchens.kitchen.Kitchen.KitchenReadyForService
 import cloudkitchens.storage.PackagedProduct
 import cloudkitchens.storage.ShelfManager.DiscardOrder
 
 import scala.collection.immutable.ListMap
+import scala.concurrent.duration.DurationInt
 
 
 case object OrderProcessor {
@@ -38,6 +39,7 @@ class OrderProcessor extends PersistentActor with ActorLogging {
 
   var orderCounter = 0
   var lastOrderReceived = "Unknown"
+  var productionCounter = 0
   var deliveryCounter = 0
   var discardedOrderCounter = 0
   var totalTipsReceived = 0
@@ -46,11 +48,13 @@ class OrderProcessor extends PersistentActor with ActorLogging {
 
   var kitchens: Map[String,ActorRef] = Map.empty
   var activeOrders:ListMap[String,OrderLifeCycle] = ListMap.empty
+  var schedule = createTimeoutWindow()
 
   // normal command handler
   override def receiveCommand() : Receive = {
 
     case KitchenReadyForService(name,_, kitchenRef, _, _) =>
+      resetActivityTimer()
       val event = KitchenRelationshipRecord(name,kitchenRef.path.toString)
       persist(event) { eventRecorded =>
         log.info(s"A new kitchen named:${eventRecorded.name} is registered to receive orders at:${kitchenRef.path}.")
@@ -58,6 +62,7 @@ class OrderProcessor extends PersistentActor with ActorLogging {
         unstashAll()
       }
     case order:Order =>
+      resetActivityTimer()
       if (kitchens.isEmpty)
         stash()
       else {
@@ -72,13 +77,16 @@ class OrderProcessor extends PersistentActor with ActorLogging {
         }
       }
     case product:PackagedProduct =>
+        resetActivityTimer()
         val event =  ProductRecord(LocalDateTime.now(),product)
         persist(event) { event=>
+          productionCounter +=1
           log.debug(s"Order update: produced: ${event.product}")
           updateState(event.product.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(event.product,log),
             ()=>OrderLifeCycle(event.product.order,Some(event.product)))
         }
     case discard:DiscardOrder =>
+      resetActivityTimer()
       val event =  DiscardOrderRecord(LocalDateTime.now(),discard)
       persist(event) { event=>
         discardedOrderCounter += 1
@@ -87,6 +95,7 @@ class OrderProcessor extends PersistentActor with ActorLogging {
           ()=>OrderLifeCycle(event.discard.order,Some(event.discard.order)))
       }
     case delivery:DeliveryComplete =>
+      resetActivityTimer()
       val event =  DeliveryCompleteRecord(delivery.time,delivery)
       persist(event) { event=>
         val tip = event.delivery.acceptance.tips
@@ -100,11 +109,13 @@ class OrderProcessor extends PersistentActor with ActorLogging {
       log.error(s"OrderProcessor re-establish connection with kitchen named $name")
       kitchens  = kitchens + (name.toString -> actorRef)
     case ActorIdentity(name, None) =>
-      log.error(s"OrderProcessor could not re-establish connection with kitchen named $name. THIS SHOULD NOT HAPPEN!")
-       kitchens  = kitchens - name.toString //TODO this should not happen.
+      // log.error(s"OrderProcessor could not re-establish connection with kitchen named $name. THIS SHOULD NOT HAPPEN!")
+      // kitchens  = kitchens - name.toString //TODO this should not happen.
 
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
+
+  var kitchenActorPath:String = "Unknown"
 
   // This method is called on recovery e.g. in case system needs restart OrderHandler after a crash.
   // the restart would be handled by the parent actor as part of Supervision strategy.
@@ -114,14 +125,15 @@ class OrderProcessor extends PersistentActor with ActorLogging {
   override def receiveRecover():Receive = {
 
     case RecoveryCompleted =>
+      log.info(s"Recovering relationship with kitchen servicing at:${kitchenActorPath}.")
+      context.actorSelection(kitchenActorPath) ! Identify(OrderProcessorActorName)
       if (orderCounter>0) {
-        reportStateAfterRecovery()
+        reportState("completed recovery of state upon restart")
         reissueOrdersNotProcessed()
       }
 
     case KitchenRelationshipRecord(name,actorPath) =>
-        log.info(s"Recovering relationship with kitchen named ${name} servicing at:${actorPath}.")
-        context.actorSelection(actorPath) ! Identify(name)
+        kitchenActorPath = actorPath
 
     case OrderRecord(date,order) =>
       orderCounter += 1
@@ -131,10 +143,12 @@ class OrderProcessor extends PersistentActor with ActorLogging {
 
     case ProductRecord(date,product) =>
       log.info(s"Recovering  $product received on: $date  ")
+      productionCounter +=1
       updateState(product.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(product,log),
         ()=>OrderLifeCycle(product.order,Some(product)))
 
     case DiscardOrderRecord(date,discard) =>
+      discardedOrderCounter += 1
       log.info(s"Recovering  $discard received on: $date  ")
       updateState(discard.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(discard,log),
           ()=>OrderLifeCycle(discard.order,Some(discard.order)))
@@ -147,8 +161,6 @@ class OrderProcessor extends PersistentActor with ActorLogging {
       log.debug(s"Order update: delivered: ${deliveryComplete.prettyString()}")
       updateState(deliveryComplete.assignment.order, (lifeCycle:OrderLifeCycle)=>lifeCycle.update(deliveryComplete,log),
         ()=>OrderLifeCycle(deliveryComplete.assignment.order,Some(deliveryComplete.assignment)))
-
-
   }
 
   /**
@@ -171,13 +183,13 @@ class OrderProcessor extends PersistentActor with ActorLogging {
     kitchens.values.head
   }
 
-  def reportStateAfterRecovery() = {
-    log.info("OrderProcessor completed recovery of state upon restart")
+  def reportState(state:String) = {
+    log.info(s"OrderProcessor $state:")
     log.info(s"  Total orders received:$orderCounter.")
     log.info(s"  Total tips received:$orderCounter.")
     log.info(s"  Total active orders:${activeOrders.size}")
-    log.info(s"  Orders pending production: ${activeOrders.values.count(!_.produced)}.")
-    log.info(s"  Orders pending delivery: ${activeOrders.values.count(_.isComplete)}.")
+    log.info(s"  Active orders pending production: ${activeOrders.values.count(!_.produced)}.")
+    log.info(s"  Active Orders pending delivery: ${activeOrders.values.count(_.isComplete)}.")
     log.info(s"  Total orders delivered:$deliveryCounter.")
     log.info(s"  Total orders discarded:$discardedOrderCounter.")
   }
@@ -185,6 +197,21 @@ class OrderProcessor extends PersistentActor with ActorLogging {
   def reissueOrdersNotProcessed() = {
     activeOrders.values.filter(!_.produced).map(_.order).foreach(order=>selectKitchenForOrder(kitchens, order) ! order)
     // TODO  request update for orders on delivery
+  }
+
+  def createTimeoutWindow():Cancellable = {
+    import system.dispatcher
+    context.system.scheduler.scheduleOnce(6000 second) {
+      log.info(s"No activity in the last 6 seconds. Shutting down!")
+      reportState("is shutting down")
+      schedule.cancel()
+      context.parent ! CloudKitchens.Shutdown
+    }
+  }
+
+  private def resetActivityTimer() = {
+    schedule.cancel()
+    schedule = createTimeoutWindow()
   }
 }
 
