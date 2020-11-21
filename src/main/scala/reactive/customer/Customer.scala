@@ -9,7 +9,7 @@ import akka.stream.scaladsl.{FileIO, Flow, Sink}
 import akka.util.Timeout
 import reactive.JacksonSerializable
 import reactive.delivery.Courier.{DeliveryAcceptance, DeliveryAcceptanceRequest}
-import reactive.order.OrderProcessor.OrderReceived
+import reactive.order.OrderLifeCycleTracker.OrderReceived
 import reactive.order.{Order, OrderOnFile}
 import spray.json._
 

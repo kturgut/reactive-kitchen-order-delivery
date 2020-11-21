@@ -1,10 +1,16 @@
 package reactive.kitchen
 
-import akka.actor.{Actor, ActorLogging, ActorRef, Props, Timers}
-import reactive.CloudKitchens.ShelfManagerActorName
+import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props, Stash, Timers}
+import akka.util.Timeout
+import javafx.util.Duration
+import reactive.ReactiveKitchens.ShelfManagerActorName
 import reactive.JacksonSerializable
 import reactive.order.Order
+import reactive.storage.ShelfManager.{CapacityUtilization, DiscardOrder}
 import reactive.storage.{PackagedProduct, ShelfManager}
+
+import scala.concurrent.duration.DurationInt
+import scala.util.{Failure, Success}
 
 /**
  * Kitchen is a Stateless Actor. Parent Actor is CloudKitchens.
@@ -38,6 +44,10 @@ import reactive.storage.{PackagedProduct, ShelfManager}
 object Kitchen {
   val TurkishCousine = "Turkish"
   val AmericanCousine = "American"
+  val DelayInMillisIfStorageIsFull = 1000
+  val DelayInMillisIfProductIsDiscarded = 1500
+  val DelayInMillisIfOverflowIsAboveThreshold = 1000
+  val OverflowUtilizationSafetyThreshold = 0.9
 
   def props(name: String, expectedOrdersPerSecond: Int) = Props(new Kitchen(name, expectedOrdersPerSecond))
 
@@ -46,19 +56,25 @@ object Kitchen {
 
   case class KitchenReadyForService(name: String, expectedOrdersPerSecond: Int, kitchenRef: ActorRef,
                                     orderProcessorRef: ActorRef, shelfManagerRef: ActorRef) extends JacksonSerializable
+
+  case object ResumeTakingOrders
+
 }
 
 
-class Kitchen(name: String, expectedOrdersPerSecond: Int) extends Actor with ActorLogging with Timers {
+class Kitchen(name: String, expectedOrdersPerSecond: Int) extends Actor with ActorLogging with Timers with Stash {
 
   import Kitchen._
+  import reactive.system.dispatcher
+  import akka.pattern.ask
+  implicit val timeout = Timeout(300 milliseconds)
 
   override val receive: Receive = closedForService
 
   def closedForService: Receive = {
     case InitializeKitchen(orderProcessor, courierDispatcher) =>
       log.debug(s"Initializing Kitchen ${self.path.toStringWithoutAddress} with $courierDispatcher and $orderProcessor")
-      val shelfManager = context.actorOf(ShelfManager.props(Some(orderProcessor)), ShelfManagerActorName)
+      val shelfManager = context.actorOf(ShelfManager.props(Some(self),Some(orderProcessor)), ShelfManagerActorName)
       context.watch(shelfManager)
       val readyNotice = KitchenReadyForService(name, expectedOrdersPerSecond, self, orderProcessor, shelfManager)
       orderProcessor ! readyNotice
@@ -69,9 +85,76 @@ class Kitchen(name: String, expectedOrdersPerSecond: Int) extends Actor with Act
   def openForService(shelfManager: ActorRef, orderProcessor: ActorRef, courierDispatcher: ActorRef): Receive = {
     case order: Order =>
       val product = PackagedProduct(order)
-      log.info(s"Kitchen $name prepared order for ${order.name}. Sending it to ShelfManager for courier pickup")
+      log.info(s"Kitchen $name prepared order for '${order.name}' id:${order.id}. Sending it to ShelfManager for courier pickup")
       shelfManager ! PackagedProduct(order)
       courierDispatcher ! product
       orderProcessor ! product
+
+    case _: DiscardOrder =>
+      context.become(suspendIncomingOrders(resume(self, DelayInMillisIfProductIsDiscarded),shelfManager,orderProcessor,courierDispatcher))
+
+    case CapacityUtilization(overflowUtilization,_) => checkShelfCapacity(overflowUtilization, shelfManager,orderProcessor,courierDispatcher)
   }
+
+
+  /**
+   * If overflow capacity utilization exceeds OverflowUtilizationSafetyThreshold is received,
+   * Kitchen temporarily suspends processing incoming orders for DelayInMillisIfOverflowIsAboveThreshold milliseconds.
+   *
+   * If DiscardOrder is received, Kitchen temporarily suspends processing incoming orders for
+   * DelayInMillisIfProductIsDiscarded milliseconds.
+   *
+   * Before Kitchen resumes processing it confirms that Shelf overflow capacity utilization is below threshold.
+   *
+   * @param schedule
+   * @param shelfManager
+   * @param orderProcessor
+   * @param courierDispatcher
+   * @return
+   */
+  def suspendIncomingOrders(schedule:Cancellable, shelfManager: ActorRef, orderProcessor: ActorRef, courierDispatcher: ActorRef):Receive = {
+    case order:Order =>
+      log.debug(s"Kitchen stashing message received in suspended state: $order")
+      stash()
+
+    case _:DiscardOrder =>
+      schedule.cancel()
+      context.become(suspendIncomingOrders(resume(self, DelayInMillisIfProductIsDiscarded),shelfManager,orderProcessor,courierDispatcher))
+
+    case ResumeTakingOrders =>
+      schedule.cancel()
+      (shelfManager ? ShelfManager.RequestCapacityUtilization).onComplete {
+        case Success(CapacityUtilization(overflowUtilization,_)) =>
+          if (overflowUtilization > OverflowUtilizationSafetyThreshold) {
+            log.debug(s"Shelf overflow capacity utilization exceeds max threshold: $overflowUtilization. Will temporarily pause processing orders.")
+            context.become(suspendIncomingOrders(resume(self, DelayInMillisIfOverflowIsAboveThreshold),shelfManager,orderProcessor,courierDispatcher))
+          }
+          else {
+            log.debug(s"Shelf overflow capacity utilization is below max threshold: $overflowUtilization. Will resume taking orders.")
+            unstashAll()
+            context.become(openForService(shelfManager, orderProcessor, courierDispatcher))
+          }
+        case Failure(exception) => log.error(s"Exception received while waiting for customer signature. ${exception.getMessage}")
+      }
+
+    case CapacityUtilization(overflowUtilization,_) => checkShelfCapacity(overflowUtilization, shelfManager,orderProcessor,courierDispatcher, Some(schedule))
+
+    case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
+  }
+
+  def resume(kitchen: ActorRef, pauseInMillis:Int): Cancellable = {
+    context.system.scheduler.scheduleOnce(pauseInMillis millis) {
+      kitchen ! ResumeTakingOrders
+    }
+  }
+
+  def checkShelfCapacity(overflowUtilization:Float, shelfManager: ActorRef, orderProcessor: ActorRef, courierDispatcher: ActorRef, prevSchedule:Option[Cancellable]=None):Unit = {
+    prevSchedule.foreach(_.cancel())
+    if (overflowUtilization > OverflowUtilizationSafetyThreshold) {
+      log.debug(s"Shelf overflow capacity utilization exceeds max threshold: $overflowUtilization. Will temporarily pause processing orders.")
+      context.become(suspendIncomingOrders(resume(self, DelayInMillisIfOverflowIsAboveThreshold), shelfManager, orderProcessor, courierDispatcher))
+    }
+  }
+
+
 }

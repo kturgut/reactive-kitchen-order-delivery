@@ -5,6 +5,7 @@ import java.time.LocalDateTime
 import akka.actor.{Actor, ActorLogging, ActorRef, Props, Timers}
 import reactive.JacksonSerializable
 import reactive.delivery.Courier.{CourierAssignment, Pickup, PickupRequest}
+import reactive.kitchen.Kitchen.OverflowUtilizationSafetyThreshold
 import reactive.order.{Order, Temperature}
 
 import scala.collection.immutable.ListMap
@@ -40,7 +41,8 @@ object ShelfManager {
   val ExpiredShelfLife = "ExpiredShelfLife"
   val ShelfCapacityExceeded = "ShelfCapacityExceeded"
 
-  def props(orderProcessorOption: Option[ActorRef]) = Props(new ShelfManager(orderProcessorOption))
+  def props(kitchenOption: Option[ActorRef]=None, orderProcessorOption: Option[ActorRef]=None) =
+    Props(new ShelfManager(kitchenOption, orderProcessorOption))
 
   // TODO Turn discard reason to trait
   case class DiscardOrder(order: Order, reason: String, createdOn: LocalDateTime) extends JacksonSerializable
@@ -52,9 +54,12 @@ object ShelfManager {
   case object StopAutomaticShelfLifeOptimization
 
   case object ManageProductsOnShelves
+
+  case object RequestCapacityUtilization
+  case class  CapacityUtilization(overlow:Float, allShelves:Float)
 }
 
-class ShelfManager(orderProcessorOption: Option[ActorRef] = None) extends Actor with ActorLogging with Timers {
+class ShelfManager(kitchenOption: Option[ActorRef], orderProcessorOption: Option[ActorRef]) extends Actor with ActorLogging with Timers {
 
   import ShelfManager._
 
@@ -73,10 +78,10 @@ class ShelfManager(orderProcessorOption: Option[ActorRef] = None) extends Actor 
 
     case ManageProductsOnShelves =>
       val updatedAssignments = publishDiscardedOrders(storage.optimizeShelfPlacement(), courierAssignments)
-      if (storage.isOverflowFull())
+      if (storage.capacityUtilization(Temperature.All) > OverflowUtilizationSafetyThreshold) {
         storage.reportStatus(true)
-//      if (storage.shelves(Temperature.All).products.size > 10)
-//        storage.reportStatus(true)
+        kitchenOption.foreach(_ ! storage.capacityUtilization)
+      }
       context.become(readyForService(updatedAssignments, storage.snapshot()))
 
     case product: PackagedProduct =>
@@ -103,6 +108,9 @@ class ShelfManager(orderProcessorOption: Option[ActorRef] = None) extends Actor 
       context.become(readyForService((
         courierAssignments + (assignment.order -> assignment)).take(MaximumCourierAssignmentCacheSize), storage))
 
+    case RequestCapacityUtilization =>
+      sender() ! storage.capacityUtilization
+
   }
 
   private def publishDiscardedOrders(discardedOrders: Iterable[DiscardOrder],
@@ -114,9 +122,11 @@ class ShelfManager(orderProcessorOption: Option[ActorRef] = None) extends Actor 
         assignment.courierRef ! discardedOrder
         log.debug(s"Sending discarded order notice $discardedOrder to orderProcessor ${orderProcessorOption.get}")
         orderProcessorOption.foreach(_ ! discardedOrder)
-
+        kitchenOption.foreach(_ ! discardedOrder)
         assignments -= assignment.order
-      case _ => orderProcessorOption.foreach(_ ! discardedOrder) // notify order processor to update order lifecycle
+      case _ =>
+        orderProcessorOption.foreach(_ ! discardedOrder) // notify order processor to update order lifecycle
+        kitchenOption.foreach(_ ! discardedOrder)
     })
     assignments
   }

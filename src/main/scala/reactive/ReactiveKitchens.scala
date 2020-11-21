@@ -6,7 +6,7 @@ import reactive.customer.Customer
 import reactive.customer.Customer.SimulateOrdersFromFile
 import reactive.delivery.CourierDispatcher
 import reactive.kitchen.Kitchen
-import reactive.order.OrderProcessor
+import reactive.order.OrderLifeCycleTracker
 
 import scala.concurrent.duration.DurationInt
 
@@ -23,7 +23,7 @@ case object ReadyForService extends ComponentStatus
 case object ShuttingDown extends ComponentStatus
 
 
-object CloudKitchens {
+object ReactiveKitchens {
 
   val ReactiveKitchensActorSystemName = "CK_ActorSystem"
   val KitchenActorName = "Kitchen"
@@ -31,7 +31,7 @@ object CloudKitchens {
   val OrderProcessorActorName = "OrderProcessor"
   val CourierDispatcherActorName = "CourierDispatcher"
   val CustomerSimulatorActorName = "OrderStreamSimulator"
-  val CloudKitchensActorName = "CloudKitchens"
+  val ReactiveKitchensActorName = "CloudKitchens"
   val componentNames = Seq(OrderProcessorActorName, KitchenActorName, CourierDispatcherActorName, CustomerSimulatorActorName)
 
   val MaxNumberOfOrdersPerSecond = 2 // TODO read this from config
@@ -52,9 +52,9 @@ object CloudKitchens {
 }
 
 
-class CloudKitchens extends Actor with ActorLogging with Stash {
+class ReactiveKitchens extends Actor with ActorLogging with Stash {
 
-  import CloudKitchens._
+  import ReactiveKitchens._
 
 
   // TODO define custom exceptions such as detecting slow services and partitioning of
@@ -68,7 +68,7 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
 
   def closedForService(components: Map[String, ActorRef]): Receive = {
     case Initialize =>
-      log.info(s"Initializing $CloudKitchensActorName")
+      log.info(s"Initializing $ReactiveKitchensActorName")
       self ! StartComponent(OrderProcessorActorName)
       self ! StartComponent(CourierDispatcherActorName)
       self ! StartComponent(CustomerSimulatorActorName)
@@ -125,7 +125,7 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
     assert(componentNames.contains(name), s"Unknown component name:$name")
     val child = name match {
       case CustomerSimulatorActorName => context.actorOf(Props[Customer], CustomerSimulatorActorName)
-      case OrderProcessorActorName => context.actorOf(Props[OrderProcessor], OrderProcessorActorName)
+      case OrderProcessorActorName => context.actorOf(Props[OrderLifeCycleTracker], OrderProcessorActorName)
       case KitchenActorName => context.actorOf(Kitchen.props(Kitchen.TurkishCousine, 2), s"${KitchenActorName}_${Kitchen.TurkishCousine}")
       case CourierDispatcherActorName => context.actorOf(Props[CourierDispatcher], CourierDispatcherActorName)
       case name => throw new IllegalArgumentException(s"Unknown component name:$name")
@@ -151,9 +151,9 @@ class CloudKitchens extends Actor with ActorLogging with Stash {
 
 object CloudKitchenManualTest extends App {
 
-  import CloudKitchens._
+  import ReactiveKitchens._
 
-  val demo = system.actorOf(Props[CloudKitchens], CloudKitchensActorName)
+  val demo = system.actorOf(Props[ReactiveKitchens], ReactiveKitchensActorName)
   demo ! Initialize
-  demo ! RunSimulation(10, 0.3f)
+  demo ! RunSimulation(20, 0.1f)
 }

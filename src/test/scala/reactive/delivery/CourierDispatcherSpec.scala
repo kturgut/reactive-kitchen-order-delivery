@@ -3,7 +3,7 @@ package reactive.delivery
 import akka.actor.Props
 import akka.testkit.TestProbe
 import reactive.BaseSpec
-import reactive.CloudKitchens.CourierDispatcherActorName
+import reactive.ReactiveKitchens.CourierDispatcherActorName
 import reactive.kitchen.Kitchen.KitchenReadyForService
 
 class CourierDispatcherSpec extends BaseSpec {

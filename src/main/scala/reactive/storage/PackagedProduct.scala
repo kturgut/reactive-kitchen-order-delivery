@@ -12,7 +12,7 @@ final case class PackagedProduct(remainingShelfLife: Float, value: Float, create
   import PackagedProduct._
 
   override def toString() = s"Product (name:${order.name}, temp:${order.temp}, remainingShelfLife:$remainingShelfLife, value:$value, " +
-    s"createdOn:${createdOn.format(dateFormatter)}, lastUpdatedOn:${updatedOn.format(dateFormatter)}, orderId:${order.id})"
+    s"createdOn:${createdOn.format(dateFormatter)}, lastUpdatedOn:${updatedOn.format(dateFormatter)}, id:${order.id})"
 
   def prettyString = s"Product (${order.name} temp:${order.temp} remainingShelfLife:$remainingShelfLife, value:$value)"
 

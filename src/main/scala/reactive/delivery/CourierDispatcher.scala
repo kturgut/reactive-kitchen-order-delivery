@@ -82,7 +82,9 @@ class CourierDispatcher extends Actor with Stash with ActorLogging {
       log.debug(s"Courier declined $courierRef assignment to $product.")
       router.route(product, originalSender)
 
-    case product: PackagedProduct => router.route(product, sender())
+    case product:PackagedProduct =>
+      log.debug(s"Dispatcher routing order with id:${product.order.id} to one of ${router.routees.size} available couriers.")
+      router.route(product, sender())
 
     case message =>
       log.error(s"Unrecognized message received from $sender. The message: $message")

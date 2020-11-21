@@ -66,7 +66,7 @@ import scala.concurrent.duration.DurationInt
  */
 
 
-case object OrderProcessor {
+case object OrderLifeCycleTracker {
 
   val MaximumSizeForLifeCycleCache = 200
 
@@ -86,7 +86,7 @@ case object OrderProcessor {
 }
 
 
-class OrderProcessor extends PersistentActor with ActorLogging {
+class OrderLifeCycleTracker extends PersistentActor with ActorLogging {
 
   import OrderLifeCycleTracker._
 

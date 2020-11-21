@@ -5,7 +5,7 @@ import java.time.LocalDateTime
 import akka.event.LoggingAdapter
 import reactive.order.Temperature.All
 import reactive.order.{Order, Temperature}
-import reactive.storage.ShelfManager.{DiscardOrder, ExpiredShelfLife, ShelfCapacityExceeded}
+import reactive.storage.ShelfManager.{CapacityUtilization, DiscardOrder, ExpiredShelfLife, ShelfCapacityExceeded}
 
 import scala.collection.mutable
 
@@ -17,15 +17,24 @@ private[storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[Te
   assert(tempSensitiveShelves.values.forall(_.decayModifier <= overflow.decayModifier),
     "Overflow shelf decayRate modifier is assumed to be higher or equal to other shelves'")
 
-  lazy val totalCapacity = shelves.map(_._2.capacity).sum
   private lazy val overflow: Shelf = shelves(All)
   private lazy val tempSensitiveShelves: mutable.Map[Temperature, Shelf] = shelves - All
   val CriticalTimeThresholdForSwappingInMillis = 2000
 
   def isOverflowFull() = !hasAvailableSpaceFor(Temperature.All)
-
+  lazy val totalCapacity = shelves.map(_._2.capacity).sum
+  def totalNumberOfProductsOnShelves:Int = shelves.map(_._2.products.size).sum
+  def capacityUtilization:CapacityUtilization = CapacityUtilization(capacityUtilization(Temperature.All),
+    totalNumberOfProductsOnShelves.toFloat / totalCapacity)
+  def capacityUtilization(temperature: Temperature):Float = {
+    val select = shelves.values.filter(shelf => shelf.supports.contains(temperature))
+    select.map(shelf=> shelf.products.size).sum.toFloat / select.map(_.capacity).sum
+  }
   def hasAvailableSpaceFor(temperature: Temperature) =
     shelves.values.filter(shelf => shelf.supports.contains(temperature)).find(_.hasAvailableSpace).isDefined
+
+
+
 
   /**
    * Put packaged product on shelf.
