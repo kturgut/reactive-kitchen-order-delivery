@@ -4,13 +4,17 @@ import java.time.temporal.ChronoUnit
 
 import akka.testkit.TestProbe
 import reactive.BaseSpec
-import reactive.delivery.Courier.{DeliveryTimeWindowSizeInSeconds, EarliestDeliveryAfterOrderReceivedInSeconds}
+import reactive.delivery.Courier.{
+  DeliveryTimeWindowSizeInSeconds,
+  EarliestDeliveryAfterOrderReceivedInSeconds
+}
 
 class ExpirationInfoSpec extends BaseSpec {
 
   "A PackagedProduct" should {
     val customer = TestProbe(CustomerName)
-    val product = samplePackagedProduct(1, customer.ref, 10, 0.5f, Hot, fixedTime)
+    val product =
+      samplePackagedProduct(1, customer.ref, 10, 0.5f, Hot, fixedTime)
 
     "be able to accurately calculate expiration time in millis at the time of package creation" in {
       val actual1 = product.expirationInMillis(1)
@@ -20,7 +24,8 @@ class ExpirationInfoSpec extends BaseSpec {
     }
 
     "be able to accurately calculate expiration time in millis after some time" in {
-      val twoSecondsLater = product.phantomCopy(1, fixedTime.plus(2, ChronoUnit.SECONDS))
+      val twoSecondsLater =
+        product.phantomCopy(1, fixedTime.plus(2, ChronoUnit.SECONDS))
       val actual1 = twoSecondsLater.expirationInMillis(1)
       assert(actual1 == 4750)
       val actual2 = twoSecondsLater.expirationInMillis(2)
@@ -29,8 +34,10 @@ class ExpirationInfoSpec extends BaseSpec {
 
     "be able to accurately calculate expected delivery window" in {
       val pickupWindow = product.pickupWindowInMillis(fixedTime)
-      assert(pickupWindow == (EarliestDeliveryAfterOrderReceivedInSeconds * 1000,
-        (DeliveryTimeWindowSizeInSeconds + EarliestDeliveryAfterOrderReceivedInSeconds) * 1000))
+      assert(
+        pickupWindow == (EarliestDeliveryAfterOrderReceivedInSeconds * 1000,
+        (DeliveryTimeWindowSizeInSeconds + EarliestDeliveryAfterOrderReceivedInSeconds) * 1000)
+      )
     }
   }
 
@@ -62,6 +69,5 @@ class ExpirationInfoSpec extends BaseSpec {
     }
 
   }
-
 
 }

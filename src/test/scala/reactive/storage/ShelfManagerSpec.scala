@@ -2,7 +2,4 @@ package reactive.storage
 
 import reactive.BaseSpec
 
-class ShelfManagerSpec extends BaseSpec {
-
-
-}
+class ShelfManagerSpec extends BaseSpec {}

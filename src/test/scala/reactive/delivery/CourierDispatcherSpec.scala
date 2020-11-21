@@ -12,9 +12,16 @@ class CourierDispatcherSpec extends BaseSpec {
     val orderProcessor = TestProbe(OrderProcessorName)
     val shelfManager = TestProbe(ShelfManagerName)
     val kitchen = TestProbe(KitchenName)
-    val kitchenReadyNotice = KitchenReadyForService(KitchenName, 2, kitchen.ref, orderProcessor.ref, shelfManager.ref)
+    val kitchenReadyNotice = KitchenReadyForService(
+      KitchenName,
+      2,
+      kitchen.ref,
+      orderProcessor.ref,
+      shelfManager.ref
+    )
     "initialize itself with KitchenReadyForService message" in {
-      val dispatcher = system.actorOf(Props[CourierDispatcher],CourierDispatcherActorName)
+      val dispatcher =
+        system.actorOf(Props[CourierDispatcher](), CourierDispatcherActorName)
       dispatcher ! kitchenReadyNotice
     }
   }

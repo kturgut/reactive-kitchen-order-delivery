@@ -28,13 +28,14 @@ class PackagedProductTestSpec extends BaseSpec {
       assert(phantom.value == product.value)
     }
 
-
     "value should deprecate over time based on decayRate and shelf decayModifier" in {
-      val actual = for (secondsIntoFuture <- 0 until 10)
-        yield {
-          val copy = product.phantomCopy(1, time.plusSeconds(secondsIntoFuture))
-          (copy.remainingShelfLife, copy.value)
-        }
+      val actual =
+        for (secondsIntoFuture <- 0 until 10)
+          yield {
+            val copy =
+              product.phantomCopy(1, time.plusSeconds(secondsIntoFuture))
+            (copy.remainingShelfLife, copy.value)
+          }
       assertEquals(actual.toList, expected)
     }
 
@@ -47,18 +48,38 @@ class PackagedProductTestSpec extends BaseSpec {
     }
 
     "compute value properly if shelf life is not positive" in {
-      val expiredProduct = samplePackagedProduct(1, orderProcessor.ref, 0, 0.5f, Hot, time)
-      val actual1 = for (secondsIntoFuture <- (-1) until 5) yield expiredProduct.phantomCopy(1, time.plusSeconds(secondsIntoFuture)).value
+      val expiredProduct =
+        samplePackagedProduct(1, orderProcessor.ref, 0, 0.5f, Hot, time)
+      val actual1 =
+        for (secondsIntoFuture <- (-1) until 5)
+          yield expiredProduct
+            .phantomCopy(1, time.plusSeconds(secondsIntoFuture))
+            .value
       val expected = List(1f, 1f, 0f, 0f, 0f, 0f)
       assert(actual1 == expected)
 
-      val invalidProduct = samplePackagedProduct(1, orderProcessor.ref, -1, 0.5f, Hot, time)
-      val actual2 = for (secondsIntoFuture <- (-1) until 5) yield invalidProduct.phantomCopy(1, time.plusSeconds(secondsIntoFuture)).value
+      val invalidProduct =
+        samplePackagedProduct(1, orderProcessor.ref, -1, 0.5f, Hot, time)
+      val actual2 =
+        for (secondsIntoFuture <- (-1) until 5)
+          yield invalidProduct
+            .phantomCopy(1, time.plusSeconds(secondsIntoFuture))
+            .value
       assert(actual2 == expected)
     }
 
-
   }
-  val expected = List((10f, 1f), (8.5f, 0.85f), (7f, 0.7f), (5.5f, 0.55f), (4f, 0.4f), (2.5f, 0.25f), (1f, 0.1f), (0f, 0f), (0f, 0f), (0f, 0f))
+  val expected = List(
+    (10f, 1f),
+    (8.5f, 0.85f),
+    (7f, 0.7f),
+    (5.5f, 0.55f),
+    (4f, 0.4f),
+    (2.5f, 0.25f),
+    (1f, 0.1f),
+    (0f, 0f),
+    (0f, 0f),
+    (0f, 0f)
+  )
 
 }

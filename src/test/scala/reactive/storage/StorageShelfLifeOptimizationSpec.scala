@@ -14,7 +14,6 @@ import scala.collection.mutable
 
 class StorageShelfLifeOptimizationSpec extends BaseSpec with StorageHelper {
 
-
   "A Storage" should {
 
     val customer = TestProbe(CustomerName)
@@ -23,13 +22,27 @@ class StorageShelfLifeOptimizationSpec extends BaseSpec with StorageHelper {
     val time = LocalDateTime.now()
 
     val hots: IndexedSeq[PackagedProduct] = for (i <- 0 until 10) yield {
-      samplePackagedProduct(i, customer.ref, i * 10, 0.5f, Hot, time.plus(i * 100, ChronoUnit.MILLIS))
+      samplePackagedProduct(
+        i,
+        customer.ref,
+        i * 10,
+        0.5f,
+        Hot,
+        time.plus(i * 100, ChronoUnit.MILLIS)
+      )
     }
 
     "store a single hot product and it should go to hot shelf " in {
       val hot = Shelf.hot(3)
       val overflow = Shelf.overflow(4)
-      val storage = Storage(NoLogging, mutable.Map(Temperature.Hot -> hot, Temperature.Cold -> cold, Temperature.All -> overflow))
+      val storage = Storage(
+        NoLogging,
+        mutable.Map(
+          Temperature.Hot -> hot,
+          Temperature.Cold -> cold,
+          Temperature.All -> overflow
+        )
+      )
 
       assert(storage.totalCapacity == 10)
       assert(storage.totalProductsOnShelves == 0)
@@ -42,7 +55,10 @@ class StorageShelfLifeOptimizationSpec extends BaseSpec with StorageHelper {
     "store multiple hot products and they should all go to hot shelf till it is full " in {
       val hot = Shelf.hot(3)
       val overflow = Shelf.overflow(4)
-      val storage = Storage(NoLogging, mutable.Map(Temperature.Hot -> hot, Temperature.All -> overflow))
+      val storage = Storage(
+        NoLogging,
+        mutable.Map(Temperature.Hot -> hot, Temperature.All -> overflow)
+      )
 
       storage.putPackageOnShelf(hots(0), time)
       storage.putPackageOnShelf(hots(1), time)
@@ -65,7 +81,14 @@ class StorageShelfLifeOptimizationSpec extends BaseSpec with StorageHelper {
     "if new product added when full, if and no order is guaranteed to expire before delivery it should discard the most recent order in overflow shelf" in {
       val hot = Shelf.hot(3)
       val overflow = Shelf.overflow(4)
-      val storage = Storage(NoLogging, mutable.Map(Temperature.Hot -> hot, Temperature.Cold -> cold, Temperature.All -> overflow))
+      val storage = Storage(
+        NoLogging,
+        mutable.Map(
+          Temperature.Hot -> hot,
+          Temperature.Cold -> cold,
+          Temperature.All -> overflow
+        )
+      )
 
       (0 to 6) foreach { a => storage.putPackageOnShelf(hots(a), time) }
       assert(!hot.hasAvailableSpace)
@@ -82,10 +105,13 @@ class StorageShelfLifeOptimizationSpec extends BaseSpec with StorageHelper {
       // TODO
     }
 
-
     def print(shelf: Shelf): Unit = {
-      println(s"${shelf.name} shelf capacity utilization:${shelf.products.size} / ${shelf.capacity}, decay rate modifier:${shelf.decayModifier}")
-      println(s"       contents: ${shelf.products.map(product => (product.order.id, product.order.name, product.value)).mkString(",")}")
+      println(
+        s"${shelf.name} shelf capacity utilization:${shelf.products.size} / ${shelf.capacity}, decay rate modifier:${shelf.decayModifier}"
+      )
+      println(s"       contents: ${shelf.products
+        .map(product => (product.order.id, product.order.name, product.value))
+        .mkString(",")}")
     }
 
   }
