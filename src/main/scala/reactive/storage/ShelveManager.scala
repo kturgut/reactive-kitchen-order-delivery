@@ -3,7 +3,10 @@ package reactive.storage
 import java.time.LocalDateTime
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Props, Timers}
-import reactive.JacksonSerializable
+import reactive.{JacksonSerializable, OrderMonitorActor, ShelfManagerActor}
+import reactive.coordinator.ComponentState.Operational
+import reactive.coordinator.Coordinator.ReportStatus
+import reactive.coordinator.{ComponentState, SystemState}
 import reactive.delivery.Courier.{CourierAssignment, Pickup, PickupRequest}
 import reactive.kitchen.Kitchen.OverflowUtilizationSafetyThreshold
 import reactive.order.{Order, Temperature}
@@ -41,8 +44,7 @@ object ShelfManager {
   val ExpiredShelfLife = "ExpiredShelfLife"
   val ShelfCapacityExceeded = "ShelfCapacityExceeded"
 
-  def props(kitchenOption: Option[ActorRef]=None, orderProcessorOption: Option[ActorRef]=None) =
-    Props(new ShelfManager(kitchenOption, orderProcessorOption))
+  def props(kitchenRef:ActorRef, orderMonitorRef:ActorRef) = Props(new ShelfManager(kitchenRef, orderMonitorRef))
 
   // TODO Turn discard reason to trait
   case class DiscardOrder(order: Order, reason: String, createdOn: LocalDateTime) extends JacksonSerializable
@@ -56,10 +58,11 @@ object ShelfManager {
   case object ManageProductsOnShelves
 
   case object RequestCapacityUtilization
-  case class  CapacityUtilization(overlow:Float, allShelves:Float)
+  case class  CapacityUtilization(overflow:Float, allShelves:Float)
 }
 
-class ShelfManager(kitchenOption: Option[ActorRef], orderProcessorOption: Option[ActorRef]) extends Actor with ActorLogging with Timers {
+class ShelfManager(kitchen:ActorRef, orderMonitor:ActorRef) extends Actor with ActorLogging with Timers {
+  log.error("SHELF MANAGER IS STARTING")
 
   import ShelfManager._
 
@@ -68,6 +71,9 @@ class ShelfManager(kitchenOption: Option[ActorRef], orderProcessorOption: Option
   override def receive: Receive = readyForService(ListMap.empty, Storage(log))
 
   def readyForService(courierAssignments: ListMap[Order, CourierAssignment], storage: Storage): Receive = {
+
+    case _:SystemState | ReportStatus =>
+      sender ! ComponentState(ShelfManagerActor,Operational, Some(self))
 
     case StartAutomaticShelfLifeOptimization =>
       timers.startTimerWithFixedDelay(TimerKey, ManageProductsOnShelves, 1 second)
@@ -80,7 +86,7 @@ class ShelfManager(kitchenOption: Option[ActorRef], orderProcessorOption: Option
       val updatedAssignments = publishDiscardedOrders(storage.optimizeShelfPlacement(), courierAssignments)
       if (storage.capacityUtilization(Temperature.All) > OverflowUtilizationSafetyThreshold) {
         storage.reportStatus(true)
-        kitchenOption.foreach(_ ! storage.capacityUtilization)
+        kitchen ! storage.capacityUtilization
       }
       context.become(readyForService(updatedAssignments, storage.snapshot()))
 
@@ -98,7 +104,7 @@ class ShelfManager(kitchenOption: Option[ActorRef], orderProcessorOption: Option
         case Left(Some(packagedProduct)) => sender() ! Pickup(packagedProduct)
         case Left(None) => sender() ! None
         case Right(discardOrder) =>
-          orderProcessorOption.foreach(_ ! discardOrder)
+          orderMonitor ! discardOrder
           sender() ! discardOrder
       }
       context.become(readyForService(courierAssignments, storage.snapshot()))
@@ -111,6 +117,7 @@ class ShelfManager(kitchenOption: Option[ActorRef], orderProcessorOption: Option
     case RequestCapacityUtilization =>
       sender() ! storage.capacityUtilization
 
+    case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
 
   private def publishDiscardedOrders(discardedOrders: Iterable[DiscardOrder],
@@ -120,13 +127,13 @@ class ShelfManager(kitchenOption: Option[ActorRef], orderProcessorOption: Option
       case Some(assignment: CourierAssignment) =>
         log.debug(s"Sending discarded order notice $discardedOrder to courier ${assignment.courierRef}")
         assignment.courierRef ! discardedOrder
-        log.debug(s"Sending discarded order notice $discardedOrder to orderProcessor ${orderProcessorOption.get}")
-        orderProcessorOption.foreach(_ ! discardedOrder)
-        kitchenOption.foreach(_ ! discardedOrder)
+        log.debug(s"Sending discarded order notice $discardedOrder to orderMonitor ${orderMonitor}")
+        orderMonitor ! discardedOrder
+        kitchen ! discardedOrder
         assignments -= assignment.order
       case _ =>
-        orderProcessorOption.foreach(_ ! discardedOrder) // notify order processor to update order lifecycle
-        kitchenOption.foreach(_ ! discardedOrder)
+        orderMonitor ! discardedOrder  // notify order processor to update order lifecycle
+        kitchen ! discardedOrder
     })
     assignments
   }

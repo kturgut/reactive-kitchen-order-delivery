@@ -51,7 +51,7 @@ object Courier {
   val DeliveryTimeWindowSizeInSeconds = 4
   val EarliestDeliveryAfterOrderReceivedInSeconds = 2
 
-  def props(name: String, orderProcessor: ActorRef, shelfManager: ActorRef) = Props(new Courier(name, orderProcessor, shelfManager))
+  def props(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) = Props(new Courier(name, orderMonitor, shelfManager))
 
   case class CourierAssignment(order: Order,
                                courierName: String, courierRef: ActorRef, createdOn: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
@@ -80,10 +80,11 @@ object Courier {
   case class Available(courier: ActorRef)
 
   case object DeliverNow
+
 }
 
 
-class Courier(name: String, orderProcessor: ActorRef, shelfManager: ActorRef) extends Actor with ActorLogging {
+class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) extends Actor with ActorLogging {
 
   import Courier._
   import akka.pattern.ask
@@ -101,7 +102,6 @@ class Courier(name: String, orderProcessor: ActorRef, shelfManager: ActorRef) ex
       shelfManager ! assignment
       context.parent ! OnAssignment(self)
       context.become(onDelivery(reminderToDeliver(self), assignment))
-
 
     case message =>
       log.warning(s"Unrecognized message received from $sender. The message: $message")
@@ -126,7 +126,7 @@ class Courier(name: String, orderProcessor: ActorRef, shelfManager: ActorRef) ex
             case Success(acceptance: DeliveryAcceptance) =>
               val delivery = DeliveryComplete(assignment, pickup.product, acceptance)
               log.info(delivery.prettyString)
-              orderProcessor ! delivery
+              orderMonitor ! delivery
               becomeAvailable(action)
             case Success(message) => log.error(s"Customer did not want to provide signature but sent this response: $message. THIS SHOULD NOT HAPPEN")
               becomeAvailable(action)

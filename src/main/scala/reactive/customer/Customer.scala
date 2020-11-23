@@ -7,9 +7,12 @@ import akka.actor.{Actor, ActorLogging, ActorRef}
 import akka.stream.alpakka.json.scaladsl.JsonReader
 import akka.stream.scaladsl.{FileIO, Flow, Sink}
 import akka.util.Timeout
-import reactive.JacksonSerializable
+import reactive.{CustomerActor, JacksonSerializable, OrderMonitorActor}
+import reactive.coordinator.ComponentState.Operational
+import reactive.coordinator.Coordinator.ReportStatus
+import reactive.coordinator.{ComponentState, SystemState}
 import reactive.delivery.Courier.{DeliveryAcceptance, DeliveryAcceptanceRequest}
-import reactive.order.OrderLifeCycleTracker.OrderReceived
+import reactive.order.OrderProcessor.OrderReceived
 import reactive.order.{Order, OrderOnFile}
 import spray.json._
 
@@ -44,6 +47,10 @@ class Customer extends Actor with ActorLogging {
   import Customer._
 
   override def receive: Receive = {
+
+    case _:SystemState | ReportStatus =>
+      sender ! ComponentState(CustomerActor,Operational, Some(self))
+
     case SimulateOrdersFromFile(orderHandler, maxNumberOfOrdersPerSec, shelfLifeMultiplier) =>
       simulateOrdersFromFile(orderHandler, maxNumberOfOrdersPerSec, shelfLifeMultiplier)
 

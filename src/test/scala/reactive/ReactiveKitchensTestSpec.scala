@@ -10,7 +10,7 @@ import reactive.order.Order
 import reactive.storage.PackagedProduct
 import org.scalatest.{BeforeAndAfterAll, WordSpecLike}
 
-class CloudKitchensTestSpec {
+class ReactiveKitchensTestSpec {
 
 }
 
@@ -29,6 +29,8 @@ trait TestSpecHelper {
   val OrderProcessorName = "OrderProcessor"
   val ShelfManagerName = "ShelfManager"
   val KitchenName = "Kitchen"
+  val DispatcherName = "Dispatcher"
+  val MonitorName = "Monitor"
   val Hot = "hot"
   val Cold = "cold"
   val Frozen = "frozen"

@@ -1,13 +1,23 @@
 import akka.actor.ActorSystem
+import reactive.coordinator.Coordinator
 
 
 package object reactive {
 
-  import ReactiveKitchens._
+  val ActorSystemName = "Reactive"
+  val KitchenActor = "Kitchen"
+  val ShelfManagerActor = "ShelfManager"
+  val OrderProcessorActor = "OrderProcessor"
+  val OrderMonitorActor = "OrderMonitor"
+  val DispatcherActor = "Dispatcher"
+  val CustomerActor = "Customer"
+  val CoordinatorActor = "Coordinator"
 
-  val system = ActorSystem(ReactiveKitchensActorSystemName)
+  val InitializationTimeInMillis = 300
 
-  val defaultKitchenActorPath = s"${ReactiveKitchensActorSystemName}/user/${ReactiveKitchensActorName}/Kitchen_Turkish"
-  val defaultOrderProcessorActorPath = s"${ReactiveKitchensActorSystemName}/user/${OrderProcessorActorName}"
+  val system = ActorSystem(ActorSystemName)
+
+  val defaultKitchenActorPath = s"${ActorSystemName}/user/${CoordinatorActor}/Kitchen_Turkish"
+  val defaultOrderProcessorActorPath = s"${ActorSystemName}/user/${OrderProcessorActor}"
 
 }

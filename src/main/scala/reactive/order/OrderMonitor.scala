@@ -2,17 +2,15 @@ package reactive.order
 
 import java.time.LocalDateTime
 
-import akka.actor.{ActorIdentity, ActorLogging, ActorRef, Cancellable, Identify, Props}
+import akka.actor.{ActorLogging, ActorRef, Cancellable}
 import akka.persistence.{PersistentActor, RecoveryCompleted}
-import reactive.ReactiveKitchens.{KitchenActorName, OrderProcessorActorName}
-import reactive.customer.Customer
+import reactive.coordinator.ComponentState.Operational
+import reactive.coordinator.Coordinator.ReportStatus
+import reactive.coordinator.{ComponentState, Coordinator, SystemState}
 import reactive.delivery.Courier.DeliveryComplete
-import reactive.delivery.CourierDispatcher
-import reactive.kitchen.Kitchen
-import reactive.kitchen.Kitchen.KitchenReadyForService
 import reactive.storage.PackagedProduct
 import reactive.storage.ShelfManager.DiscardOrder
-import reactive.{ReactiveKitchens, JacksonSerializable, system}
+import reactive.{JacksonSerializable, OrderMonitorActor}
 
 import scala.collection.immutable.ListMap
 import scala.concurrent.duration.DurationInt
@@ -20,57 +18,55 @@ import scala.concurrent.duration.DurationInt
 /**
  * OrderProcessor is a Stateful Persistent Actor. Parent Actor is CloudKitchens.
  *
- *   What is ResourceManager State?
+ * What is ResourceManager State?
  *     - activeOrders: ListMap of OrderLifeCycle objects by orderId.
  *       This is acting as a fixed sized FIFO cache, maintaining only the active orders that are in the pipeline.
  *     - Various counters
  *         - Last order received, totalOrdersReceived, totalTipsReceived etc.
  *     - Kitchens registered. Though the current code is for one kitchen it is possible to support multiple and
- *     match orders to kitchens. TODO
- *   CLEANUP Note: Create a case class and put all state under OrderProcessorState. This will help implement Snapshot offer
- *   as we will simply save and retrieve the latest snapshot. Snapshots are created whenever we want.
- *   (ie. every 1K Orders for instance) TODO
+ *       match orders to kitchens. TODO
+ *       CLEANUP Note: Create a case class and put all state under OrderProcessorState. This will help implement Snapshot offer
+ *       as we will simply save and retrieve the latest snapshot. Snapshots are created whenever we want.
+ *       (ie. every 1K Orders for instance) TODO
  *
  * As a stateful persistent actor OrderProcessor can be in one of these two states:
- *   1- receiveCommand: All commands are received here under normal operation.
- *   These commands are then persisted as Events on disk.
- *   2- receiveRecover: During startup all recovery messages goes into this receiver.
+ * 1- receiveCommand: All commands are received here under normal operation.
+ * These commands are then persisted as Events on disk.
+ * 2- receiveRecover: During startup all recovery messages goes into this receiver.
  *
  * Timers: OrderProcessor has a scheduled timer to wakeup every 6 seconds to check if there has been any activity
- *   This timer sends ShutDown signal to Master in case of no life cycle events received during that time.
+ * This timer sends ShutDown signal to Master in case of no life cycle events received during that time.
  *
  * OrderProcessor receives the following incoming messages:
- *   KitchenReadyForService => Helps establish the connection between Kitchen and OrderProcessor
- *   Order =>
- *        Send back OrderDeceivedAck to Customer
- *        Forward Order to select Kitchen
- *   PackagedProduct (LifeCycleEvent) => Update state cache
- *   DiscardOrder (LifeCycleEvent) => Update state cache
- *   DeliveryComplete (LifeCycleEvent) => Update state cache
+ * KitchenReadyForService => Helps establish the connection between Kitchen and OrderProcessor
+ * Order =>
+ * Send back OrderDeceivedAck to Customer
+ * Forward Order to select Kitchen
+ * PackagedProduct (LifeCycleEvent) => Update state cache
+ * DiscardOrder (LifeCycleEvent) => Update state cache
+ * DeliveryComplete (LifeCycleEvent) => Update state cache
  *
  * Order LifeCycle
- *   1- Order "created"
- *   2- PackagedProduct is created (Kitchen prepared the order and sent to ShelfManager)
- *   3- CourierAssignment - currently not recorded TODO
- *   4- Pickup (of PackagedProduct from ShelfManager)  - currently not recorded TODO
- *   5- DeliveryAcceptanceRequest - sent from Courier to Customer - currently not recorded TODO
- *   6- DeliveryAcceptance - sent from Customer to Courier - currently not recorded TODO
- *   7- OrderComplete - Courier to OrderProcessor
- *   8- DiscardOrder - from ShelfManager
- *   9- Unknown termination - We should also record if for any reason delivery could not get completed for reasons outside of ShelfManager TODO
+ * 1- Order "created"
+ * 2- PackagedProduct is created (Kitchen prepared the order and sent to ShelfManager)
+ * 3- CourierAssignment - currently not recorded TODO
+ * 4- Pickup (of PackagedProduct from ShelfManager)  - currently not recorded TODO
+ * 5- DeliveryAcceptanceRequest - sent from Courier to Customer - currently not recorded TODO
+ * 6- DeliveryAcceptance - sent from Customer to Courier - currently not recorded TODO
+ * 7- OrderComplete - Courier to OrderProcessor
+ * 8- DiscardOrder - from ShelfManager
+ * 9- Unknown termination - We should also record if for any reason delivery could not get completed for reasons outside of ShelfManager TODO
  *
  * During Recovery after a crash TODO
- *   LifeCycle cache for active orders will be recreated by "Event Sourcing". This gives us opportunity for disaster recovery:
- *   Based on the above Order LifeCycle state transition, we can check if the order is recent, and we can follow up with Kitchen or Courier
- *   and reissue as needed.
+ * LifeCycle cache for active orders will be recreated by "Event Sourcing". This gives us opportunity for disaster recovery:
+ * Based on the above Order LifeCycle state transition, we can check if the order is recent, and we can follow up with Kitchen or Courier
+ * and reissue as needed.
  */
 
 
-case object OrderLifeCycleTracker {
+case object OrderMonitor {
 
   val MaximumSizeForLifeCycleCache = 200
-
-  case class OrderReceived(id: String)
 
   // EVENTS
   case class OrderRecord(time: LocalDateTime, order: Order) extends JacksonSerializable
@@ -81,14 +77,12 @@ case object OrderLifeCycleTracker {
 
   case class DiscardOrderRecord(time: LocalDateTime, discard: DiscardOrder) extends JacksonSerializable
 
-  case class KitchenRelationshipRecord(name: String, actorPath: String) extends JacksonSerializable
-
 }
 
 
-class OrderLifeCycleTracker extends PersistentActor with ActorLogging {
+class OrderMonitor extends PersistentActor with ActorLogging {
 
-  import OrderLifeCycleTracker._
+  import OrderMonitor._
 
   override val persistenceId: String = "persistentOrderProcessorId"
   var orderCounter = 0
@@ -97,7 +91,6 @@ class OrderLifeCycleTracker extends PersistentActor with ActorLogging {
   var deliveryCounter = 0
   var discardedOrderCounter = 0
   var totalTipsReceived = 0
-  var kitchens: Map[String, ActorRef] = Map.empty
   var activeOrders: ListMap[String, OrderLifeCycle] = ListMap.empty
   var schedule = createTimeoutWindow()
   var kitchenActorPath: String = "Unknown"
@@ -105,29 +98,19 @@ class OrderLifeCycleTracker extends PersistentActor with ActorLogging {
   // normal command handler
   override def receiveCommand(): Receive = {
 
-    case KitchenReadyForService(name, _, kitchenRef, _, _) =>
-      resetActivityTimer()
-      val event = KitchenRelationshipRecord(name, kitchenRef.path.toString)
-      persist(event) { eventRecorded =>
-        log.info(s"A new kitchen named:${eventRecorded.name} is registered to receive orders at:${kitchenRef.path}.")
-        kitchens += (eventRecorded.name -> kitchenRef)
-        unstashAll()
-      }
+    case _:SystemState | ReportStatus =>
+      sender ! ComponentState(OrderMonitorActor,Operational, Some(self))
+
     case order: Order =>
       resetActivityTimer()
-      if (kitchens.isEmpty)
-        stash()
-      else {
-        val event = OrderRecord(LocalDateTime.now(), order)
-        persist(event) { eventRecorded =>
-          orderCounter += 1
-          lastOrderReceived = eventRecorded.order.name
-          sender() ! OrderReceived(order.id)
-          log.info(s"Received ${orderCounter}th order on ${event.time}. Sending it kitchen:$order")
-          selectKitchenForOrder(kitchens, order) ! order
-          updateState(order, (lifeCycle: OrderLifeCycle) => lifeCycle, () => OrderLifeCycle(order))
-        }
+      val event = OrderRecord(LocalDateTime.now(), order)
+      persist(event) { eventRecorded =>
+        orderCounter += 1
+        lastOrderReceived = eventRecorded.order.name
+        log.info(s"Received ${orderCounter}th order on ${event.time}. Sending it kitchen:$order")
+        updateState(order, (lifeCycle: OrderLifeCycle) => lifeCycle, () => OrderLifeCycle(order))
       }
+
     case product: PackagedProduct =>
       resetActivityTimer()
       val event = ProductRecord(LocalDateTime.now(), product)
@@ -157,13 +140,6 @@ class OrderLifeCycleTracker extends PersistentActor with ActorLogging {
         updateState(event.delivery.assignment.order, (lifeCycle: OrderLifeCycle) => lifeCycle.update(event.delivery, log),
           () => OrderLifeCycle(event.delivery.assignment.order, Some(event.delivery.assignment)))
       }
-    case ActorIdentity(name, Some(actorRef)) =>
-      log.error(s"OrderProcessor re-establish connection with kitchen named $name")
-      kitchens = kitchens + (name.toString -> actorRef)
-    case ActorIdentity(name, None) =>
-    // log.error(s"OrderProcessor could not re-establish connection with kitchen named $name. THIS SHOULD NOT HAPPEN!")
-    // kitchens  = kitchens - name.toString //TODO this should not happen.
-
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
 
@@ -172,13 +148,13 @@ class OrderLifeCycleTracker extends PersistentActor with ActorLogging {
     schedule = createTimeoutWindow()
   }
 
+  import reactive.system.dispatcher
   def createTimeoutWindow(): Cancellable = {
-    import system.dispatcher
-    context.system.scheduler.scheduleOnce(15 second) {
-      log.info(s"No activity in the last 6 seconds. Shutting down!")
+    context.system.scheduler.scheduleOnce(10 second) {
+      log.info(s"No activity in the last 10 seconds. Shutting down!")
       reportState("is shutting down")
       schedule.cancel()
-      context.parent ! ReactiveKitchens.Shutdown
+      context.parent ! Coordinator.Shutdown
     }
   }
 
@@ -190,15 +166,10 @@ class OrderLifeCycleTracker extends PersistentActor with ActorLogging {
   override def receiveRecover(): Receive = {
 
     case RecoveryCompleted =>
-      log.info(s"Recovering relationship with kitchen servicing at:${kitchenActorPath}.")
-      context.actorSelection(kitchenActorPath) ! Identify(OrderProcessorActorName)
       if (orderCounter > 0) {
         reportState("completed recovery of state upon restart")
-        reissueOrdersNotProcessed()
+        // reissueOrdersNotProcessed()
       }
-
-    case KitchenRelationshipRecord(name, actorPath) =>
-      kitchenActorPath = actorPath
 
     case OrderRecord(date, order) =>
       orderCounter += 1
@@ -253,28 +224,8 @@ class OrderLifeCycleTracker extends PersistentActor with ActorLogging {
     log.info(s"  Total orders discarded:$discardedOrderCounter.")
   }
 
-  def reissueOrdersNotProcessed() = {
-    activeOrders.values.filter(!_.produced).map(_.order).foreach(order => selectKitchenForOrder(kitchens, order) ! order)
-    // TODO  request update for orders on delivery
-  }
-
-  // TODO this where we would normally match orders to kitchens if multiple kitchens were registered
-  def selectKitchenForOrder(kitchens: Map[String, ActorRef], order: Order): ActorRef = {
-    assert(kitchens.nonEmpty)
-    kitchens.values.head
-  }
+  //  def reissueOrdersNotProcessed() = {
+  //    activeOrders.values.filter(!_.produced).map(_.order).foreach(order => selectKitchenForOrder(kitchens, order) ! order)
+  //    // TODO  request update for orders on delivery
+  //  }
 }
-
-case object OrderHandlerManualTest extends App {
-  val orderHandler = reactive.system.actorOf(Props[OrderLifeCycleTracker], "orderHandler")
-  val dispatcher = reactive.system.actorOf(Props[CourierDispatcher], "dispatcher")
-  val kitchen = system.actorOf(Kitchen.props(Kitchen.TurkishCousine, 2), s"${KitchenActorName}_${Kitchen.TurkishCousine}")
-  kitchen ! Kitchen.InitializeKitchen(orderHandler, dispatcher)
-
-  val customer = reactive.system.actorOf(Props[Customer])
-
-  for (i <- 1 to 100) {
-    orderHandler ! Order(i.toString, s" yummy_food_$i", "hot", i * 10, 1f / i, customer)
-  }
-}
-

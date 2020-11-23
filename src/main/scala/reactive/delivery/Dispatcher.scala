@@ -1,9 +1,14 @@
 package reactive.delivery
 
+import java.time.LocalDateTime
+
 import akka.actor.{Actor, ActorLogging, ActorRef, Stash, Terminated}
 import akka.routing.{ActorRefRoutee, BroadcastRoutingLogic, RoundRobinRoutingLogic, Router}
-import reactive.kitchen.Kitchen.KitchenReadyForService
-import reactive.storage.PackagedProduct
+import reactive.{DispatcherActor, OrderProcessorActor, ShelfManagerActor}
+import reactive.coordinator.ComponentState.{Initializing, Operational, State, UnhealthyButOperational}
+import reactive.coordinator.Coordinator.ReportStatus
+import reactive.coordinator.{ComponentState, SystemState}
+import reactive.storage.{PackagedProduct, ShelfManager}
 
 /**
  * CourierDispatcher is a Stateless Actor. Parent Actor is CloudKitchens.
@@ -33,66 +38,113 @@ import reactive.storage.PackagedProduct
  *         DiscardOrder => Send Available to CourierDispatcher, and become available.
  */
 
-class CourierDispatcher extends Actor with Stash with ActorLogging {
+object Dispatcher {
 
+  case class RecruitCouriersForKitchen(kitchenName:String, numberOfCouriers:Int, shelfManager:ActorRef,orderMonitor:ActorRef, orderProcessor:ActorRef)
+
+  case class RecruitCouriers(numberOfCouriers:Int, shelfManager:ActorRef,orderMonitor:ActorRef)
+
+  case class CourierAvailability(available:Int, total:Int) {
+    def health =  available.toFloat /total
+    def state:State = if (health<MinHealthThreshold) UnhealthyButOperational else Operational
+  }
+
+  case object ReportAvailability
+
+  val SafeAvailableCourierThreshold = 3
+  val MinHealthThreshold = 0.15f
+  val NumberOfCouriersToRecruitInBatches = 20
+
+}
+
+class Dispatcher extends Actor with Stash with ActorLogging {
+
+  import Dispatcher._
   import Courier._
 
   override val receive: Receive = closedForService
-  val MinimumNumberOfCouriersThreshold = 3
 
   def numberOfCouriers(maxNumberOfOrdersPerSecond: Int): Int = maxNumberOfOrdersPerSecond * 10
 
   def closedForService: Receive = {
 
-    case KitchenReadyForService(_, expectedOrdersPerSecond, _, orderProcessorRef, shelfManagerRef) =>
-      val slaves = for (id <- 1 to numberOfCouriers(expectedOrdersPerSecond)) yield {
-        val courier = context.actorOf(Courier.props(s"Courier_$id", orderProcessorRef, shelfManagerRef), s"Courier_$id")
-        context.watch(courier)
-        ActorRefRoutee(courier)
+    case ReportStatus =>
+      sender ! ComponentState(DispatcherActor,Initializing, Some(self))
+
+    case state:SystemState =>
+      (state.shelfManagerOption, state.orderMonitorOption) match {
+        case (Some(shelfManager),Some(orderMonitor)) =>
+          self ! RecruitCouriers(NumberOfCouriersToRecruitInBatches,shelfManager,orderMonitor)
+        case _ =>
       }
-      val router = Router(RoundRobinRoutingLogic(), slaves)
-      log.info(s"CourierDispatcher connected with OrderProcessor and ShelfManager. Ready for service with ${slaves.size} couriers!")
-      unstashAll()
-      context.become(active(orderProcessorRef, shelfManagerRef, router))
+
+    case recruitOrder:RecruitCouriers =>
+      recruitCouriers(recruitOrder, 0)
+
     case _ =>
       log.info(s"CourierDispatcher is not active. Stashing all messages")
       stash()
   }
 
-  def active(orderProcessor: ActorRef, shelfManager: ActorRef, router: Router): Receive = {
+  def active(orderMonitor: ActorRef, shelfManager: ActorRef, router: Router, lastCourierId:Int): Receive = {
     case Terminated(ref) =>
       log.warning(s"Courier '${ref.path.name}' is terminated, creating replacement!")
       val newCourier = context.actorOf(
-        Courier.props(s"Replacement for ${ref.path.name})", orderProcessor, shelfManager), s"${ref.path.name}_replacement")
+        Courier.props(s"Replacement for ${ref.path.name})", orderMonitor, shelfManager), s"${ref.path.name}_replacement")
       context.watch(newCourier)
-      context.become(active(orderProcessor, shelfManager, router.addRoutee(ref).removeRoutee(ref)))
+      context.become(active(orderMonitor, shelfManager, router.addRoutee(ref).removeRoutee(ref), lastCourierId))
 
     case OnAssignment(courierRef) =>
       log.info(s"Courier ${courierRef.path} is now on assignment. Removed from dispatch crew")
-      if (router.routees.size < MinimumNumberOfCouriersThreshold)
-        log.error(s"Number of available couriers is below threshold: ${router.routees.size}")
-      context.become(active(orderProcessor, shelfManager, router.removeRoutee(courierRef)))
+      self.tell(ReportAvailability, context.parent)
+      context.become(active(orderMonitor, shelfManager, router.removeRoutee(courierRef), lastCourierId))
 
     case Available(courierRef) =>
       log.info(s"Courier ${courierRef.path} is now available. Added to dispatch crew")
-      context.become(active(orderProcessor, shelfManager, router.addRoutee(courierRef)))
+      context.become(active(orderMonitor, shelfManager, router.addRoutee(courierRef), lastCourierId))
 
     // reroute if courier declines
     case DeclineCourierAssignment(courierRef, product, originalSender) =>
       log.debug(s"Courier declined $courierRef assignment to $product.")
       router.route(product, originalSender)
 
+    case ReportStatus =>
+      sender() ! ComponentState(DispatcherActor,CourierAvailability(router.routees.size, lastCourierId).state, Some(self))
+
+    case ReportAvailability =>
+      sender() ! CourierAvailability(router.routees.size, lastCourierId)
+
     case product:PackagedProduct =>
       log.debug(s"Dispatcher routing order with id:${product.order.id} to one of ${router.routees.size} available couriers.")
       router.route(product, sender())
 
+    case recruitOrder:RecruitCouriers =>
+      recruitCouriers(recruitOrder, lastCourierId)
+
     case message =>
       log.error(s"Unrecognized message received from $sender. The message: $message")
+
   }
 
   /**
    * It is possible to broadcast messages to couriers as well if needed
    */
   def asBroadcastRouter(router: Router) = router.copy(logic = BroadcastRoutingLogic())
+
+  def recruitCouriers(demand:RecruitCouriers, lastCourierId: Int=0) = {
+    val finalCourierId = lastCourierId + demand.numberOfCouriers
+    val slaves = for (id <- lastCourierId+1 to finalCourierId) yield {
+      val courier = context.actorOf(Courier.props(s"Courier_$id", demand.orderMonitor, demand.shelfManager), s"Courier_$id")
+      context.watch(courier)
+      ActorRefRoutee(courier)
+    }
+    val router = Router(RoundRobinRoutingLogic(), slaves)
+    log.info(s"CourierDispatcher connected with OrderProcessor and kitchen '${demand.shelfManager.path.toStringWithoutAddress}'. Ready for service with ${slaves.size} couriers!")
+    self.tell(ReportAvailability,context.parent)
+    self.tell(ReportStatus,context.parent)
+    unstashAll()
+    context.become(active(demand.orderMonitor, demand.shelfManager, router, finalCourierId ))
+  }
+
 }
 

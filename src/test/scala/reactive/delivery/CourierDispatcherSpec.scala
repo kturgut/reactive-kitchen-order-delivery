@@ -2,9 +2,8 @@ package reactive.delivery
 
 import akka.actor.Props
 import akka.testkit.TestProbe
-import reactive.BaseSpec
-import reactive.ReactiveKitchens.CourierDispatcherActorName
-import reactive.kitchen.Kitchen.KitchenReadyForService
+import reactive.{BaseSpec, DispatcherActor}
+
 
 class CourierDispatcherSpec extends BaseSpec {
 
@@ -12,10 +11,11 @@ class CourierDispatcherSpec extends BaseSpec {
     val orderProcessor = TestProbe(OrderProcessorName)
     val shelfManager = TestProbe(ShelfManagerName)
     val kitchen = TestProbe(KitchenName)
-    val kitchenReadyNotice = KitchenReadyForService(KitchenName, 2, kitchen.ref, orderProcessor.ref, shelfManager.ref)
+    val monitor = TestProbe(MonitorName)
+    val dispatcher = TestProbe(KitchenName)
     "initialize itself with KitchenReadyForService message" in {
-      val dispatcher = system.actorOf(Props[CourierDispatcher],CourierDispatcherActorName)
-      dispatcher ! kitchenReadyNotice
+      val dispatcher = system.actorOf(Props[Dispatcher], DispatcherActor)
+      dispatcher ! "Hello There. Finish ME!"
     }
   }
 }
