@@ -160,12 +160,21 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
     case Shutdown =>
       log.info("Gracefully Shutting down ReactiveKitchens!")
       heartBeatSchedule.values.foreach(_.cancel())
-      broadcastRouter(state).route(PoisonPill, sender())
+      // OrderMonitor is persistent actor. Needs special message.
+      state.orderMonitorOption match {
+        case Some(orderMonitor) =>
+          orderMonitor ! Shutdown
+          broadcastRouter(state.terminated(orderMonitor)).route(PoisonPill,sender())
+        case None => broadcastRouter(state).route(PoisonPill, sender())
+      }
 
     case StopComponent(name) =>
       log.info(s"Stopping component $name")
-      heartBeatSchedule.values.foreach(_.cancel())
-      state.get(name).actor.foreach(componentRef => context.stop(componentRef))
+      heartBeatSchedule.filter(entry=>entry._1.contains(name)).foreach(_._2.cancel())
+      if (name==OrderMonitor)
+        state.orderMonitorOption.foreach(_ ! Shutdown)
+      else
+        state.get(name).actor.foreach(componentRef => context.stop(componentRef))
 
     case Terminated(ref) =>
       log.info(s"Component with ref ${ref.path} is terminated")
@@ -181,7 +190,7 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
 
     case CourierAvailability(availability, _)  =>
       if (availability == 0)
-        sender() ! RecruitCouriers(dispatcherConf.numberOfCouriersToRecruitInBatches, state.shelfManagerOption.get, state.orderMonitorOption.get)
+        sender() ! RecruitCouriers(dispatcherConf.NumberOfCouriersToRecruitInBatches, state.shelfManagerOption.get, state.orderMonitorOption.get)
 
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
@@ -199,7 +208,7 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
     systemState.components.values.foreach(compState => log.info(compState.toString()))
 
   def runSimulation(state: SystemState, shelfLifeMultiplier: Float, numberOfOrdersPerSecond: Int): Unit =
-    system.scheduler.scheduleOnce(coordinatorConf.initializationTimeInMillis) {
+    system.scheduler.scheduleOnce(coordinatorConf.InitializationTimeInMillis) {
       (state.customerOption, state.orderProcessorOption) match {
         case (Some(customer), Some(orderProcessor)) =>
           log.info(s"Starting Order Simulation with $numberOfOrdersPerSecond orders per second, and shelf life multiplier:$shelfLifeMultiplier")
@@ -235,7 +244,7 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
   private def createHeartBeatSchedule(systemState: SystemState): Map[String, Cancellable] = systemState.activeActors.map(createHeartBeatSchedule).toMap
 
   private def createHeartBeatSchedule(actorRef: ActorRef): (String, Cancellable) =
-    actorRef.path.toStringWithoutAddress -> context.system.scheduler.scheduleOnce(coordinatorConf.heartBeatScheduleMillis) {
+    actorRef.path.toStringWithoutAddress -> context.system.scheduler.scheduleOnce(coordinatorConf.HeartBeatScheduleMillis) {
       actorRef ! ReportStatus
     }
 

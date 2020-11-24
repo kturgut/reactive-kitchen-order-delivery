@@ -69,7 +69,7 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef) extends Actor with
 
   timers.startSingleTimer(TimerKey, StartAutomaticShelfLifeOptimization, 100 millis)
 
-  override def receive: Receive = readyForService(ListMap.empty, Storage(log,config.shelfConfig(),config.criticalTimeThresholdForSwappingInMillis.toMillis))
+  override def receive: Receive = readyForService(ListMap.empty, Storage(log,config.shelfConfig(),config.CriticalTimeThresholdForSwappingInMillis.toMillis))
 
   def readyForService(courierAssignments: ListMap[Order, CourierAssignment], storage: Storage): Receive = {
 
@@ -77,7 +77,7 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef) extends Actor with
       sender ! ComponentState(ShelfManagerActor, Operational, Some(self))
 
     case StartAutomaticShelfLifeOptimization =>
-      timers.startTimerWithFixedDelay(TimerKey, ManageProductsOnShelves,  config.shelfLifeOptimizationTimerDelay)
+      timers.startTimerWithFixedDelay(TimerKey, ManageProductsOnShelves,  config.ShelfLifeOptimizationTimerDelay)
 
     case StopAutomaticShelfLifeOptimization =>
       log.warning("Stopping Automatic Shelf Life Optimization")
@@ -85,9 +85,9 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef) extends Actor with
 
     case ManageProductsOnShelves =>
       val updatedAssignments = publishDiscardedOrders(storage.optimizeShelfPlacement(), courierAssignments)
-      if (storage.capacityUtilization(Temperature.All) > config.overflowUtilizationReportingThreshold)
+      if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationReportingThreshold)
         storage.reportStatus(true)
-      if (storage.capacityUtilization(Temperature.All) > config.overflowUtilizationSafetyThreshold)
+      if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationSafetyThreshold)
         kitchen ! storage.capacityUtilization
       context.become(readyForService(updatedAssignments, storage.snapshot()))
 
@@ -113,7 +113,7 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef) extends Actor with
     case assignment: CourierAssignment =>
       log.debug(s"Shelf manager received assignment: ${assignment.prettyString}")
       context.become(readyForService((
-        courierAssignments + (assignment.order -> assignment)).take(config.maximumCourierAssignmentCacheSize), storage))
+        courierAssignments + (assignment.order -> assignment)).take(config.MaximumCourierAssignmentCacheSize), storage))
 
     case RequestCapacityUtilization =>
       sender() ! storage.capacityUtilization

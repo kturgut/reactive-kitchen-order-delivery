@@ -7,8 +7,8 @@ import scala.concurrent.duration.{Duration, FiniteDuration}
 
 class DispatcherConfig(config: Config) extends Extension {
 
-  val minimumAvailableToRecruitedCouriersRatio = config.getDouble("minimum-available-to-recruited-couriers-ratio").toFloat
-  val numberOfCouriersToRecruitInBatches = config.getInt("number-of-couriers-to-recruit-in-batches")
+  val MinimumAvailableToRecruitedCouriersRatio = config.getDouble("minimum-available-to-recruited-couriers-ratio").toFloat
+  val NumberOfCouriersToRecruitInBatches = config.getInt("number-of-couriers-to-recruit-in-batches")
 
 }
 

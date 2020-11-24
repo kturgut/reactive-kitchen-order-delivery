@@ -46,7 +46,7 @@ object Dispatcher {
   case class CourierAvailability(available: Int, total: Int) {
     def health = available.toFloat / total
 
-    def state(config:DispatcherConfig): State = if (health < config.minimumAvailableToRecruitedCouriersRatio) UnhealthyButOperational else Operational
+    def state(config:DispatcherConfig): State = if (health < config.MinimumAvailableToRecruitedCouriersRatio) UnhealthyButOperational else Operational
   }
 
   case object ReportAvailability
@@ -73,7 +73,7 @@ class Dispatcher extends Actor with Stash with ActorLogging {
     case state: SystemState =>
       (state.shelfManagerOption, state.orderMonitorOption) match {
         case (Some(shelfManager), Some(orderMonitor)) =>
-          self ! RecruitCouriers(config.numberOfCouriersToRecruitInBatches, shelfManager, orderMonitor)
+          self ! RecruitCouriers(config.NumberOfCouriersToRecruitInBatches, shelfManager, orderMonitor)
         case _ =>
       }
 

@@ -145,7 +145,7 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
   }
 
   def reminderToDeliver(courierActorRefToRemind: ActorRef): Cancellable = {
-    val delay = randomizer.nextFloat() * config.deliveryTimeWindowMillis + config.earliestDeliveryAfterOrderReceivedMillis
+    val delay = randomizer.nextFloat() * config.DeliveryTimeWindowMillis + config.EarliestDeliveryAfterOrderReceivedMillis
     context.system.scheduler.scheduleOnce(delay millis) {
       courierActorRefToRemind ! DeliverNow
     }

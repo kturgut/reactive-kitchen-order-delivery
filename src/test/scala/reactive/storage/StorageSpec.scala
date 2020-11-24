@@ -204,7 +204,6 @@ trait StorageHelper {
   def shelfConfig = {
     val configString =
     """
-      |    shelf {
       |      hot-shelf-capacity = 10
       |      cold-shelf-capacity = 10
       |      frozen-shelf-capacity = 10
@@ -214,7 +213,6 @@ trait StorageHelper {
       |      cold-shelf-decay-modifier = 1
       |      frozen-shelf-decay-modifier = 1
       |      overflow-shelf-decay-modifier = 2
-      |    }
       |""".stripMargin
     val config = ConfigFactory.parseString(configString)
     ShelfConfig(config)

@@ -12,10 +12,10 @@ class CoordinatorConfig(config: Config) extends Extension {
 
   implicit def toFiniteDuration(d: java.time.Duration): FiniteDuration = Duration.fromNanos(d.toNanos)
 
-  val heartBeatScheduleMillis:FiniteDuration =
+  val HeartBeatScheduleMillis:FiniteDuration =
     config.getDuration("heart-beat-schedule-millis")
 
-  val initializationTimeInMillis:FiniteDuration = config.
+  val InitializationTimeInMillis:FiniteDuration = config.
     getDuration("initialization-time-millis")
 
 }

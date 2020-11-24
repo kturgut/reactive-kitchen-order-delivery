@@ -3,7 +3,8 @@ package reactive.order
 import java.time.LocalDateTime
 
 import akka.actor.{ActorLogging, ActorRef, Cancellable}
-import akka.persistence.{PersistentActor, RecoveryCompleted}
+import akka.event.LoggingAdapter
+import akka.persistence.{DeleteMessagesFailure, DeleteMessagesSuccess, PersistentActor, RecoveryCompleted, SaveSnapshotFailure, SaveSnapshotSuccess, SnapshotOffer}
 import reactive.config.OrderMonitorConfig
 import reactive.coordinator.ComponentState.Operational
 import reactive.coordinator.Coordinator.ReportStatus
@@ -68,17 +69,80 @@ import scala.concurrent.duration.DurationInt
 case object OrderMonitor {
 
   // EVENTS
-  case class OrderRecord(time: LocalDateTime, order: Order) extends JacksonSerializable
 
-  case class ProductRecord(time: LocalDateTime, product: PackagedProduct) extends JacksonSerializable
+  sealed trait Event extends JacksonSerializable
 
-  case class DeliveryCompleteRecord(time: LocalDateTime, delivery: DeliveryComplete) extends JacksonSerializable
+  case class OrderRecord(time: LocalDateTime, order: Order) extends Event
 
-  case class DiscardOrderRecord(time: LocalDateTime, discard: DiscardOrder) extends JacksonSerializable
+  case class ProductRecord(time: LocalDateTime, product: PackagedProduct) extends Event
 
-  case class OrderState(orderCounter:Int, lastOrderReceived:String, productionCounter:Int, deliveryCounter:Int,
-                        discardedOrderCounter:Int, totalTipsReceived:Int,
-                        activeOrders:ListMap[String, OrderLifeCycle] = ListMap.empty) {
+  case class DeliveryCompleteRecord(time: LocalDateTime, delivery: DeliveryComplete) extends Event
+
+  case class DiscardOrderRecord(time: LocalDateTime, discard: DiscardOrder) extends Event
+
+  case class OrderLifeCycleState(orderCounter:Int=0,
+                                 lastOrderReceived:String="Unknown",
+                                 productionCounter:Int=0,
+                                 deliveryCounter:Int=0,
+                                 discardedOrderCounter:Int=0,
+                                 totalTipsReceived:Int=0,
+                                 eventCounter:Int=0,
+                                 activeOrders:ListMap[String, OrderLifeCycle] = ListMap.empty) extends JacksonSerializable {
+
+    def update(event:Event, maxCacheSize:Int, log:LoggingAdapter):OrderLifeCycleState = {
+      event match {
+        case OrderRecord(_,order) =>
+          copy(orderCounter=orderCounter+1,
+            lastOrderReceived=order.id,
+            eventCounter=eventCounter+1,
+            activeOrders=updateCache(order,
+              (lifeCycle: OrderLifeCycle) => lifeCycle, () => OrderLifeCycle(order),maxCacheSize))
+
+        case ProductRecord(_,product) =>
+          copy(productionCounter=productionCounter+1,
+            eventCounter=eventCounter+1,
+            activeOrders=updateCache(product.order,
+              (lifeCycle: OrderLifeCycle) => lifeCycle.update(product, log),() => OrderLifeCycle(product.order, Some(product)),maxCacheSize))
+
+        case DiscardOrderRecord(_,discard) =>
+          copy(discardedOrderCounter=discardedOrderCounter + 1,
+            eventCounter=eventCounter+1,
+            activeOrders=updateCache(discard.order,
+              (lifeCycle: OrderLifeCycle) => lifeCycle.update(discard, log),() =>OrderLifeCycle(discard.order, Some(discard.order)),maxCacheSize))
+
+        case DeliveryCompleteRecord(_,delivery) =>
+          copy(totalTipsReceived=totalTipsReceived + delivery.acceptance.tips,
+            deliveryCounter = deliveryCounter  + 1,
+            eventCounter=eventCounter + 1,
+            activeOrders=updateCache(delivery.product.order,
+              (lifeCycle: OrderLifeCycle) => lifeCycle.update(delivery, log), () => OrderLifeCycle(delivery.assignment.order, Some(delivery.assignment)),maxCacheSize))
+      }
+    }
+
+    def updateCache(order: Order,
+                    update: (OrderLifeCycle) => OrderLifeCycle,
+                    create: () => OrderLifeCycle,
+                    maxCacheSize:Int
+                   ): ListMap[String, OrderLifeCycle] = {
+      (activeOrders.get(order.id) match {
+        case Some(lifeCycle) =>
+          val updatedEntry = update(lifeCycle)
+          if (updatedEntry.isComplete) activeOrders else activeOrders + (order.id -> updatedEntry)
+        case None => activeOrders + (order.id -> create())
+      }).take(maxCacheSize)
+    }
+
+    def report(log:LoggingAdapter, message: String) = {
+      log.info(s"OrderLifeCycleMonitor $message:")
+      log.info(s"  Total orders received:$orderCounter.")
+      log.info(s"  Total tips received:$totalTipsReceived.")
+      log.info(s"  Total active orders:${activeOrders.size}")
+      log.info(s"  Active orders pending production: ${activeOrders.values.count(!_.produced)}.")
+      log.info(s"  Active Orders pending delivery: ${activeOrders.values.count(_.isComplete)}.")
+      log.info(s"  Total orders delivered:$deliveryCounter.")
+      log.info(s"  Total orders discarded:$discardedOrderCounter.")
+    }
+
   }
 
 }
@@ -88,148 +152,122 @@ class OrderMonitor extends PersistentActor with ActorLogging {
 
   import OrderMonitor._
   val config = OrderMonitorConfig(context.system)
-
-  override val persistenceId: String = "persistentOrderProcessorId"
-  var orderCounter = 0
-  var lastOrderReceived = "Unknown"
-  var productionCounter = 0
-  var deliveryCounter = 0
-  var discardedOrderCounter = 0
-  var totalTipsReceived = 0
-  var activeOrders: ListMap[String, OrderLifeCycle] = ListMap.empty
+  var state = OrderLifeCycleState()
   var schedule = createTimeoutWindow()
 
-  // normal command handler
-  override def receiveCommand(): Receive = {
+  override val persistenceId: String = "OrderLifeCycleManagerPersistenceId"
+
+  /**
+   * Normal Command handler
+   */
+  override def receiveCommand: Receive = {
 
     case _:SystemState | ReportStatus =>
       sender ! ComponentState(OrderMonitorActor,Operational, Some(self))
 
+    case Coordinator.Shutdown => context.stop(self)
+
     case order: Order =>
-      resetActivityTimer()
       val event = OrderRecord(LocalDateTime.now(), order)
-      persist(event) { eventRecorded =>
-        orderCounter += 1
-        lastOrderReceived = eventRecorded.order.name
-        log.info(s"Received ${orderCounter}th order on ${event.time}. Sending it kitchen:$order")
-        updateState(order, (lifeCycle: OrderLifeCycle) => lifeCycle, () => OrderLifeCycle(order))
+      persist(event) { event =>
+        log.info(s"Received ${state.orderCounter}th order on ${event.time}:$order")
+        updateState(event)
       }
 
     case product: PackagedProduct =>
-      resetActivityTimer()
       val event = ProductRecord(LocalDateTime.now(), product)
       persist(event) { event =>
-        productionCounter += 1
         log.debug(s"Order update: produced: ${event.product}")
-        updateState(event.product.order, (lifeCycle: OrderLifeCycle) => lifeCycle.update(event.product, log),
-          () => OrderLifeCycle(event.product.order, Some(event.product)))
+        updateState(event)
       }
+
     case discard: DiscardOrder =>
-      resetActivityTimer()
       val event = DiscardOrderRecord(LocalDateTime.now(), discard)
       persist(event) { event =>
-        discardedOrderCounter += 1
-        log.debug(s"Order update: discarded: ${event.discard.order.name} for ${event.discard.reason} id ${event.discard.order.id}. Total discarded:$discardedOrderCounter")
-        updateState(event.discard.order, (lifeCycle: OrderLifeCycle) => lifeCycle.update(event.discard, log),
-          () => OrderLifeCycle(event.discard.order, Some(event.discard.order)))
+        log.debug(s"Order update: discarded: ${event.discard.order.name} for ${event.discard.reason} id ${event.discard.order.id}. Total discarded:${state.discardedOrderCounter}")
+        updateState(event)
       }
+
     case delivery: DeliveryComplete =>
-      resetActivityTimer()
       val event = DeliveryCompleteRecord(delivery.time, delivery)
       persist(event) { event =>
-        val tip = event.delivery.acceptance.tips
-        totalTipsReceived += tip
-        deliveryCounter += 1
         log.debug(s"Order update: delivered: ${event.delivery.prettyString()}")
-        updateState(event.delivery.assignment.order, (lifeCycle: OrderLifeCycle) => lifeCycle.update(event.delivery, log),
-          () => OrderLifeCycle(event.delivery.assignment.order, Some(event.delivery.assignment)))
+        updateState(event)
       }
+
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
 
+  /**
+   * This method is called on recovery e.g. in case system needs restart OrderHandler after a crash.
+   * Restart would be handled by the Coordinator parent actor as part of its Supervision strategy.
+   * Coordinator may choose to replay orders received right before crash after recovery. (Not implemented!)
+   */
+  override def receiveRecover: Receive = {
+
+    case event@OrderRecord(date, order) =>
+      log.debug(s"Recovering  $order received on: $date")
+      updateState(event)
+
+    case event@ProductRecord(date, product) =>
+      log.debug(s"Recovering  $product received on: $date")
+      updateState(event)
+
+    case event@DiscardOrderRecord(date, discard) =>
+      log.debug(s"Recovering  $discard received on: $date")
+      updateState(event)
+
+    case event@DeliveryCompleteRecord(date, deliveryComplete) =>
+      log.debug(s"Recovering  ${deliveryComplete.prettyString()} received on $date")
+      updateState(event)
+
+    case RecoveryCompleted =>
+      if (state.orderCounter > 0) {
+        state.report(log,"completed recovery of state upon restart")
+      }
+
+    case SnapshotOffer(metadata,snapshot:OrderLifeCycleState) =>
+      log.info(s"Recovering from snapshot with timestamp: ${metadata.timestamp}")
+      state = snapshot
+
+    case error:SaveSnapshotFailure =>
+      log.error(s"Error when taking a snapshot $error")
+  }
+
+  import reactive.system.dispatcher
   private def resetActivityTimer() = {
     schedule.cancel()
     schedule = createTimeoutWindow()
   }
 
-  import reactive.system.dispatcher
+  /**
+   * Will shutdown system if no Order activity
+   */
   def createTimeoutWindow(): Cancellable = {
-    context.system.scheduler.scheduleOnce(10 second) {
-      log.info(s"No activity in the last 10 seconds. Shutting down!")
-      reportState("is shutting down")
+    context.system.scheduler.scheduleOnce(config.InactivityShutdownTimer) {
+      log.info(s"No activity in the last ${config.InactivityShutdownTimer.toSeconds} seconds!")
+      state.report(log,"is shutting down")
       schedule.cancel()
       context.parent ! Coordinator.Shutdown
     }
   }
 
-  // This method is called on recovery e.g. in case system needs restart OrderHandler after a crash.
-  // the restart would be handled by the parent actor as part of Supervision strategy.
-  // This would give us opportunity to preserve state as, until the restart happens all incoming messages
-  // would be queued in the mailbox of the OrderProcessor. Thus for example we can reissue an order to kitchen
-  // if we had received the order but did not get the record that shows that kitchen has produced the Product yet!
-  override def receiveRecover(): Receive = {
-
-    case RecoveryCompleted =>
-      if (orderCounter > 0) {
-        reportState("completed recovery of state upon restart")
-        // reissueOrdersNotProcessed()
-      }
-
-    case OrderRecord(date, order) =>
-      orderCounter += 1
-      lastOrderReceived = order.name
-      log.info(s"Recovering  $order received on: $date  ")
-      updateState(order, (lifeCycle: OrderLifeCycle) => lifeCycle, () => OrderLifeCycle(order))
-
-    case ProductRecord(date, product) =>
-      log.info(s"Recovering  $product received on: $date  ")
-      productionCounter += 1
-      updateState(product.order, (lifeCycle: OrderLifeCycle) => lifeCycle.update(product, log),
-        () => OrderLifeCycle(product.order, Some(product)))
-
-    case DiscardOrderRecord(date, discard) =>
-      discardedOrderCounter += 1
-      log.info(s"Recovering  $discard received on: $date  ")
-      updateState(discard.order, (lifeCycle: OrderLifeCycle) => lifeCycle.update(discard, log),
-        () => OrderLifeCycle(discard.order, Some(discard.order)))
-
-    case DeliveryCompleteRecord(time, deliveryComplete) =>
-      log.info(s"Recovering  $deliveryComplete")
-      val tip = deliveryComplete.acceptance.tips
-      totalTipsReceived += tip
-      deliveryCounter += 1
-      log.debug(s"Order update: delivered: ${deliveryComplete.prettyString()}")
-      updateState(deliveryComplete.assignment.order, (lifeCycle: OrderLifeCycle) => lifeCycle.update(deliveryComplete, log),
-        () => OrderLifeCycle(deliveryComplete.assignment.order, Some(deliveryComplete.assignment)))
-  }
-
   /**
-   * Create or update lifecycle entry for this order. Removed closed orders and keep cache size under max size
+   * Update state from event.
+   * Reset activity timer.
+   * Checkpoint if needed
    */
-  def updateState(order: Order,
-                  update: (OrderLifeCycle) => OrderLifeCycle,
-                  create: () => OrderLifeCycle
-                 ): Unit =
-    activeOrders = (activeOrders.get(order.id) match {
-      case Some(lifeCycle) =>
-        val updatedEntry = update(lifeCycle)
-        if (updatedEntry.isComplete) activeOrders else activeOrders + (order.id -> updatedEntry)
-      case None => activeOrders + (order.id -> create())
-    }).take(config.MaximumOrderLifeCycleCacheSize)
-
-  def reportState(state: String) = {
-    log.info(s"OrderProcessor $state:")
-    log.info(s"  Total orders received:$orderCounter.")
-    log.info(s"  Total tips received:$orderCounter.")
-    log.info(s"  Total active orders:${activeOrders.size}")
-    log.info(s"  Active orders pending production: ${activeOrders.values.count(!_.produced)}.")
-    log.info(s"  Active Orders pending delivery: ${activeOrders.values.count(_.isComplete)}.")
-    log.info(s"  Total orders delivered:$deliveryCounter.")
-    log.info(s"  Total orders discarded:$discardedOrderCounter.")
+  def updateState(event:Event):Unit = {
+    mayBeCheckpoint()
+    resetActivityTimer()
+    state = state.update(event,config.MaxOrderLifeCycleCacheSize,log)
   }
 
-  //  def reissueOrdersNotProcessed() = {
-  //    activeOrders.values.filter(!_.produced).map(_.order).foreach(order => selectKitchenForOrder(kitchens, order) ! order)
-  //    // TODO  request update for orders on delivery
-  //  }
+  def mayBeCheckpoint():Unit = {
+    if (state.eventCounter % config.MaxEventsWithoutCheckpoint == 0) {
+      log.debug(s"Taking snapshot after ${state.eventCounter} events received")
+      saveSnapshot(state)
+    }
+  }
+
 }

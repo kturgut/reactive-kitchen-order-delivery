@@ -63,10 +63,10 @@ class Customer extends Actor with ActorLogging {
   }
 
   def signatureWithTip(order: Order): DeliveryAcceptance = {
-    if (Duration.between(order.createdOn, LocalDateTime.now()).toMillis < config.customerHappinessInMillisThreshold.toMillis )
-      DeliveryAcceptance(order, "Just in time. Thank you!!", config.onTimeDeliveryRecommendedTip)
+    if (Duration.between(order.createdOn, LocalDateTime.now()).toMillis < config.CustomerHappinessInMillisThreshold.toMillis )
+      DeliveryAcceptance(order, "Just in time. Thank you!!", config.OnTimeDeliveryRecommendedTip)
     else
-      DeliveryAcceptance(order, "Thanks", config.lateDeliveryRecommendedTip)
+      DeliveryAcceptance(order, "Thanks", config.LateDeliveryRecommendedTip)
   }
 
   def simulateOrdersFromFile(orderHandler: ActorRef, maxNumberOfOrdersPerSecond: Int = 2, shelfLifeMultiplier: Float, take:Int): Unit = {
@@ -76,7 +76,7 @@ class Customer extends Actor with ActorLogging {
 
     val sampleFlow = Flow[Order].take(take)
 
-    val ordersFromFileSource = FileIO.fromPath(Paths.get(config.simulationOrderFilePath))
+    val ordersFromFileSource = FileIO.fromPath(Paths.get(config.SimulationOrderFilePath))
       .via(JsonReader.select("$[*]")).async
       .map(byteString => byteString.utf8String.parseJson.convertTo[OrderOnFile])
       .map(order => order.copy(shelfLife = (order.shelfLife * shelfLifeMultiplier).toInt))

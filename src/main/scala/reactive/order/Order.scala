@@ -4,6 +4,7 @@ import java.time.LocalDateTime
 
 import akka.actor.ActorRef
 import akka.event.LoggingAdapter
+import reactive.JacksonSerializable
 import reactive.delivery.Courier.DeliveryComplete
 import reactive.order.Temperature._
 import reactive.storage.PackagedProduct
@@ -68,7 +69,7 @@ case object Order {
 case class OrderLifeCycle(order: Order,
                           product: Option[Product] = None,
                           delivery: Option[DeliveryComplete] = None,
-                          discard: Option[DiscardOrder] = None) {
+                          discard: Option[DiscardOrder] = None) extends JacksonSerializable {
 
   def isComplete: Boolean = produced && (delivered || discarded)
 
@@ -83,7 +84,9 @@ case class OrderLifeCycle(order: Order,
       log.warning(s"Product already created for order ${order.id}");
       this
     }
-    else this.copy(product = Some(productUpdate))
+    else {
+      this.copy(product = Some(productUpdate))
+    }
   }
 
   def update(deliveryUpdate: DeliveryComplete, log: LoggingAdapter): OrderLifeCycle = {

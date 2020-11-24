@@ -26,8 +26,7 @@ class CoordinatorSpec extends BaseSpec {
     }
     "reissue freshly received Orders to Kitchen after a recovery of OrderMonitor if no activity from Kitchen within threshold" in {
     }
-    "restart OrderMonitor if it is terminated" in {
-    }
+
     "shutdown the system if no activity on OrderMonitor" in {
     }
     "send fake Orders to properly completed and delivered and track average processing time" in {

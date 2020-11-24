@@ -8,15 +8,15 @@ import scala.concurrent.duration.{Duration, FiniteDuration}
 
 case class ShelfConfig(config: Config) {
 
-  val hotShelfCapacity = config.getInt("hot-shelf-capacity")
-  val coldShelfCapacity = config.getInt("cold-shelf-capacity")
-  val frozenShelfCapacity = config.getInt("frozen-shelf-capacity")
-  val overflowShelfCapacity = config.getInt("overflow-shelf-capacity")
+  val HotShelfCapacity = config.getInt("hot-shelf-capacity")
+  val ColdShelfCapacity = config.getInt("cold-shelf-capacity")
+  val FrozenShelfCapacity = config.getInt("frozen-shelf-capacity")
+  val OverflowShelfCapacity = config.getInt("overflow-shelf-capacity")
 
-  val hotShelfDecayModifier = config.getInt("hot-shelf-decay-modifier")
-  val coldShelfDecayModifier = config.getInt("cold-shelf-decay-modifier")
-  val frozenShelfDecayModifier = config.getInt("frozen-shelf-decay-modifier")
-  val overflowShelfDecayModifier = config.getInt("overflow-shelf-decay-modifier")
+  val HotShelfDecayModifier = config.getInt("hot-shelf-decay-modifier")
+  val ColdShelfDecayModifier = config.getInt("cold-shelf-decay-modifier")
+  val FrozenShelfDecayModifier = config.getInt("frozen-shelf-decay-modifier")
+  val OverflowShelfDecayModifier = config.getInt("overflow-shelf-decay-modifier")
 }
 
 
@@ -24,15 +24,15 @@ class ShelfManagerConfig(config: Config) extends Extension {
 
   implicit def toFiniteDuration(d: java.time.Duration): FiniteDuration = Duration.fromNanos(d.toNanos)
 
-  val criticalTimeThresholdForSwappingInMillis: FiniteDuration = config.getDuration("critical-time-threshold-for-swapping-millis")
+  val CriticalTimeThresholdForSwappingInMillis: FiniteDuration = config.getDuration("critical-time-threshold-for-swapping-millis")
 
-  val overflowUtilizationSafetyThreshold = config.getInt("overflow-utilization-safety-threshold")
+  val OverflowUtilizationSafetyThreshold = config.getInt("overflow-utilization-safety-threshold")
 
-  val overflowUtilizationReportingThreshold = config.getInt("overflow-utilization-reporting-threshold")
+  val OverflowUtilizationReportingThreshold = config.getInt("overflow-utilization-reporting-threshold")
 
-  val maximumCourierAssignmentCacheSize = config.getInt("max-courier-assignment-cache-size")
+  val MaximumCourierAssignmentCacheSize = config.getInt("max-courier-assignment-cache-size")
 
-  val shelfLifeOptimizationTimerDelay = config.getDuration("shelf-life-optimization-timer-delay-millis")
+  val ShelfLifeOptimizationTimerDelay = config.getDuration("shelf-life-optimization-timer-delay-millis")
 
   def shelfConfig() = ShelfConfig(config.getConfig("shelf"))
 }

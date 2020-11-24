@@ -79,7 +79,7 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
           val shelfManager = context.actorOf(ShelfManager.props(self, orderMonitor), ShelfManagerActor)
           context.watch(shelfManager)
           dispatcher.tell(state.update(ComponentState(ShelfManagerActor, Operational, Some(shelfManager))), sender())
-          dispatcher ! RecruitCouriers(dispatcherConf.numberOfCouriersToRecruitInBatches, shelfManager, orderMonitor)
+          dispatcher ! RecruitCouriers(dispatcherConf.NumberOfCouriersToRecruitInBatches, shelfManager, orderMonitor)
           becomeActive(shelfManager, orderMonitor, dispatcher)
       }
 
@@ -96,11 +96,11 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
       courierDispatcher ! product
       orderMonitor ! product
 
-    case dispatcher: CourierAvailability if dispatcher.health < dispatcherConf.minimumAvailableToRecruitedCouriersRatio =>
-      val delay = if (dispatcher.available == 0) kitchenConf.suspensionDispatcherNotAvailableMillis else kitchenConf.suspensionDispatcherAvailabilityBelowThresholdMillis
+    case dispatcher: CourierAvailability if dispatcher.health < dispatcherConf.MinimumAvailableToRecruitedCouriersRatio =>
+      val delay = if (dispatcher.available == 0) kitchenConf.SuspensionDispatcherNotAvailableMillis else kitchenConf.SuspensionDispatcherAvailabilityBelowThresholdMillis
       suspend(delay, shelfManager, orderMonitor, courierDispatcher)
 
-    case _: DiscardOrder => suspend(kitchenConf.suspensionProductDiscardedMillis, shelfManager, orderMonitor, courierDispatcher)
+    case _: DiscardOrder => suspend(kitchenConf.SuspensionProductDiscardedMillis, shelfManager, orderMonitor, courierDispatcher)
 
     case shelfCapacity: CapacityUtilization => checkShelfCapacity(shelfCapacity, shelfManager, orderMonitor, courierDispatcher)
 
@@ -130,7 +130,7 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
 
     case _: DiscardOrder =>
       schedule.cancel()
-      context.become(suspendIncomingOrders(resume(self, kitchenConf.suspensionProductDiscardedMillis), shelfManager, orderMonitor, courierDispatcher))
+      context.become(suspendIncomingOrders(resume(self, kitchenConf.SuspensionProductDiscardedMillis), shelfManager, orderMonitor, courierDispatcher))
 
     case AttemptToResumeTakingOrders =>
       schedule.cancel()
@@ -163,9 +163,9 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
 
   private def checkShelfCapacity(shelfCapacity: CapacityUtilization, shelfManager: ActorRef, orderMonitor: ActorRef, courierDispatcher: ActorRef, prevSchedule: Option[Cancellable] = None): Unit = {
     prevSchedule.foreach(_.cancel())
-    if (shelfCapacity.overflow > shelfManagerConf.overflowUtilizationSafetyThreshold) {
+    if (shelfCapacity.overflow > shelfManagerConf.OverflowUtilizationSafetyThreshold) {
       log.debug(s"Shelf overflow capacity utilization exceeds max threshold: ${shelfCapacity.overflow}. Will temporarily pause processing orders.")
-      suspend(kitchenConf.suspensionOverflowAboveThresholdMillis, shelfManager, orderMonitor, courierDispatcher)
+      suspend(kitchenConf.SuspensionOverflowAboveThresholdMillis, shelfManager, orderMonitor, courierDispatcher)
     }
     else {
       log.debug(s"Shelf overflow capacity utilization is below max threshold: ${shelfCapacity.overflow}. Will resume taking orders.")

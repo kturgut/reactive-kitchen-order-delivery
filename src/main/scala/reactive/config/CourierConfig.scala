@@ -8,10 +8,10 @@ import scala.concurrent.duration.{Duration, FiniteDuration}
 class CourierConfig(config: Config) extends Extension with ConfigBase {
   implicit def toFiniteDuration(d: java.time.Duration): FiniteDuration = Duration.fromNanos(d.toNanos)
 
-  val deliveryTimeWindowMillis: Long = config.getLong("delivery-time-window-millis")
-  val earliestDeliveryAfterOrderReceivedMillis: Long = config.getLong("earliest-delivery-after-order-received-millis")
+  val DeliveryTimeWindowMillis: Long = config.getLong("delivery-time-window-millis")
+  val EarliestDeliveryAfterOrderReceivedMillis: Long = config.getLong("earliest-delivery-after-order-received-millis")
 
-  def deliveryWindow:(Long,Long) = (earliestDeliveryAfterOrderReceivedMillis,deliveryTimeWindowMillis)
+  def deliveryWindow:(Long,Long) = (EarliestDeliveryAfterOrderReceivedMillis,DeliveryTimeWindowMillis)
 
 }
 

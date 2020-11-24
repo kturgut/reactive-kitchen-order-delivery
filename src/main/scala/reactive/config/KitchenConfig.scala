@@ -9,11 +9,11 @@ class KitchenConfig(config: Config) extends Extension with ConfigBase {
 
   implicit def toFiniteDuration(d: java.time.Duration): FiniteDuration = Duration.fromNanos(d.toNanos)
 
-  val suspensionStorageFullMillis:FiniteDuration = config.getDuration("suspension-storage-full-millis")
-  val suspensionProductDiscardedMillis:FiniteDuration = config.getDuration("suspension-product-discarded-millis")
-  val suspensionOverflowAboveThresholdMillis:FiniteDuration = config.getDuration("suspension-overflow-above-threshold-millis")
-  val suspensionDispatcherNotAvailableMillis:FiniteDuration = config.getDuration("suspension-dispatcher-not-available-millis")
-  val suspensionDispatcherAvailabilityBelowThresholdMillis:FiniteDuration = config.getDuration("suspension-dispatcher-availability-below-threshold-millis")
+  val SuspensionStorageFullMillis:FiniteDuration = config.getDuration("suspension-storage-full-millis")
+  val SuspensionProductDiscardedMillis:FiniteDuration = config.getDuration("suspension-product-discarded-millis")
+  val SuspensionOverflowAboveThresholdMillis:FiniteDuration = config.getDuration("suspension-overflow-above-threshold-millis")
+  val SuspensionDispatcherNotAvailableMillis:FiniteDuration = config.getDuration("suspension-dispatcher-not-available-millis")
+  val SuspensionDispatcherAvailabilityBelowThresholdMillis:FiniteDuration = config.getDuration("suspension-dispatcher-availability-below-threshold-millis")
 
 }
 

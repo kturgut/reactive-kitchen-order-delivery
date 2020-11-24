@@ -5,15 +5,14 @@ import com.typesafe.config.Config
 
 import scala.concurrent.duration.{Duration, FiniteDuration}
 
-
 class CustomerConfig(config: Config) extends Extension {
 
   implicit def toFiniteDuration(d: java.time.Duration): FiniteDuration = Duration.fromNanos(d.toNanos)
 
-  val onTimeDeliveryRecommendedTip:Int = config.getInt("on-time-delivery-recommended-tip")
-  val lateDeliveryRecommendedTip:Int = config.getInt("on-time-delivery-recommended-tip")
-  val customerHappinessInMillisThreshold:FiniteDuration = config.getDuration("customer-happiness-in-millis-threshold")
-  val simulationOrderFilePath:String = config.getString("simulation-order-file-path")
+  val OnTimeDeliveryRecommendedTip:Int = config.getInt("on-time-delivery-recommended-tip")
+  val LateDeliveryRecommendedTip:Int = config.getInt("on-time-delivery-recommended-tip")
+  val CustomerHappinessInMillisThreshold:FiniteDuration = config.getDuration("customer-happiness-in-millis-threshold")
+  val SimulationOrderFilePath:String = config.getString("simulation-order-file-path")
 
 }
 
