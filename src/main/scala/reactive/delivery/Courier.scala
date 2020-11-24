@@ -6,6 +6,7 @@ import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props}
 import akka.util.Timeout
 import org.scalatest.time.SpanSugar.convertFloatToGrainOfTime
 import reactive.JacksonSerializable
+import reactive.config.{CourierConfig, DispatcherConfig}
 import reactive.order.Order
 import reactive.storage.PackagedProduct
 import reactive.storage.ShelfManager.DiscardOrder
@@ -15,41 +16,38 @@ import scala.util.{Failure, Success}
 
 /**
  * Courier is a Stateless Actor. Parent Actor is CourierDispatcher.
- *   Couriers deliver the PackagedProducts to Customers.
- *   Couriers are created by CourierDispatcher as needed.
- *   Couriers are
+ * Couriers deliver the PackagedProducts to Customers.
+ * Couriers are created by CourierDispatcher as needed.
+ * Couriers are
  *
  * Courier can be in one of two states at any one time
- *   1- available
- *   2- onDelivery
+ * 1- available
+ * 2- onDelivery
  *
  * Timers: OneTime timer is created when courier goes from available to onDelivery.
  *
  * Couriers handle the following incoming messages
- *   when available:
- *      PackagedProduct =>
- *          CourierAssignment to ShelfManager
- *          OnAssignment to CourierDispatcher
- *          Timer: Start a one time timer to send a 'DeliverNow' message to self within 2-6 seconds
- *          become available.
- *   when onDelivery:
- *       DeliverNow =>
- *          Send a PickupRequest to ShelfManager. (Expect to receive with a timeout). Response could be:
- *              Pickup: This acknowledges that the product is ready to be picked up at ShelfManager
- *                   Courier sends a DeliveryAcceptanceRequest to Customer.
- *                         Customer currently only respond with DeliveryAcceptance with a tip amount. If this is received,
- *                         customer notifies the Order processor that Order is complete and dispatcher that he is available.
-*                          If no response received within timeout limit, Courier drops the order and notifies dispatcher.
-*               DiscardOrder: which the Courier sends to itself
-*         DiscardOrder => Send Available to CourierDispatcher, and become available.
- *        PackagedProduct => If for any reason it receives a PackagedProduct while on Delivery,
- *              Courier sends a DeclineAssignment to Dispatcher.
+ * when available:
+ * PackagedProduct =>
+ * CourierAssignment to ShelfManager
+ * OnAssignment to CourierDispatcher
+ * Timer: Start a one time timer to send a 'DeliverNow' message to self within 2-6 seconds
+ * become available.
+ * when onDelivery:
+ * DeliverNow =>
+ * Send a PickupRequest to ShelfManager. (Expect to receive with a timeout). Response could be:
+ * Pickup: This acknowledges that the product is ready to be picked up at ShelfManager
+ * Courier sends a DeliveryAcceptanceRequest to Customer.
+ * Customer currently only respond with DeliveryAcceptance with a tip amount. If this is received,
+ * customer notifies the Order processor that Order is complete and dispatcher that he is available.
+ * If no response received within timeout limit, Courier drops the order and notifies dispatcher.
+ * DiscardOrder: which the Courier sends to itself
+ * DiscardOrder => Send Available to CourierDispatcher, and become available.
+ * PackagedProduct => If for any reason it receives a PackagedProduct while on Delivery,
+ * Courier sends a DeclineAssignment to Dispatcher.
  */
 
 object Courier {
-
-  val DeliveryTimeWindowSizeInSeconds = 4
-  val EarliestDeliveryAfterOrderReceivedInSeconds = 2
 
   def props(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) = Props(new Courier(name, orderMonitor, shelfManager))
 
@@ -86,12 +84,15 @@ object Courier {
 
 class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) extends Actor with ActorLogging {
 
+  val config = CourierConfig(context.system)
+
   import Courier._
   import akka.pattern.ask
   import reactive.system.dispatcher
+
   lazy val randomizer = new scala.util.Random(100L)
   override val receive: Receive = available
-  implicit val timeout = Timeout(300 milliseconds)
+  implicit val timeout = config.timeout
 
   def available: Receive = {
     case product: PackagedProduct =>
@@ -144,8 +145,8 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
   }
 
   def reminderToDeliver(courierActorRefToRemind: ActorRef): Cancellable = {
-    val delay = randomizer.nextFloat() * DeliveryTimeWindowSizeInSeconds + EarliestDeliveryAfterOrderReceivedInSeconds
-    context.system.scheduler.scheduleOnce(delay seconds) {
+    val delay = randomizer.nextFloat() * config.deliveryTimeWindowMillis + config.earliestDeliveryAfterOrderReceivedMillis
+    context.system.scheduler.scheduleOnce(delay millis) {
       courierActorRefToRemind ! DeliverNow
     }
   }

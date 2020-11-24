@@ -5,7 +5,9 @@ import java.time.temporal.ChronoUnit
 
 import akka.event.NoLogging
 import akka.testkit.TestProbe
+import com.typesafe.config.ConfigFactory
 import reactive.BaseSpec
+import reactive.config.ShelfConfig
 import reactive.order.Temperature
 import reactive.storage.PackagedProduct.dateFormatter
 import reactive.storage.ShelfManager.DiscardOrder
@@ -85,7 +87,7 @@ class StorageSpec extends BaseSpec with StorageHelper {
   "A Storage" should {
 
     val customer = TestProbe(CustomerName)
-    val shelves = Storage(NoLogging, Shelf.temperatureSensitiveShelves)
+    val shelves = Storage(NoLogging, Shelf.temperatureSensitiveShelves(shelfConfig))
     val time = LocalDateTime.now()
     val shortLifeProduct = samplePackagedProduct(1, customer.ref, 1, 0.99f, Hot, time)
     val longLifeProduct = samplePackagedProduct(2, customer.ref, 1000, 0.5f, Hot, time)
@@ -197,5 +199,24 @@ trait StorageHelper {
 
     println
     storage.shelves.values.foreach(print)
+  }
+
+  def shelfConfig = {
+    val configString =
+    """
+      |    shelf {
+      |      hot-shelf-capacity = 10
+      |      cold-shelf-capacity = 10
+      |      frozen-shelf-capacity = 10
+      |      overflow-shelf-capacity = 15
+      |
+      |      hot-shelf-decay-modifier = 1
+      |      cold-shelf-decay-modifier = 1
+      |      frozen-shelf-decay-modifier = 1
+      |      overflow-shelf-decay-modifier = 2
+      |    }
+      |""".stripMargin
+    val config = ConfigFactory.parseString(configString)
+    ShelfConfig(config)
   }
 }

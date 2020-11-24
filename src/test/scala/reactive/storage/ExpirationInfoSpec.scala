@@ -4,7 +4,6 @@ import java.time.temporal.ChronoUnit
 
 import akka.testkit.TestProbe
 import reactive.BaseSpec
-import reactive.delivery.Courier.{DeliveryTimeWindowSizeInSeconds, EarliestDeliveryAfterOrderReceivedInSeconds}
 
 class ExpirationInfoSpec extends BaseSpec {
 
@@ -25,12 +24,6 @@ class ExpirationInfoSpec extends BaseSpec {
       assert(actual1 == 4750)
       val actual2 = twoSecondsLater.expirationInMillis(2)
       assert(actual2 == 3550)
-    }
-
-    "be able to accurately calculate expected delivery window" in {
-      val pickupWindow = product.pickupWindowInMillis(fixedTime)
-      assert(pickupWindow == (EarliestDeliveryAfterOrderReceivedInSeconds * 1000,
-        (DeliveryTimeWindowSizeInSeconds + EarliestDeliveryAfterOrderReceivedInSeconds) * 1000))
     }
   }
 

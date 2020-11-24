@@ -1,18 +1,17 @@
 package reactive.kitchen
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props, Stash, Terminated, Timers}
-import akka.util.Timeout
+import reactive.config.Configs
 import reactive.coordinator.ComponentState.{Operational, UnhealthyButOperational}
 import reactive.coordinator.Coordinator.ReportStatus
 import reactive.coordinator.{ComponentState, SystemState}
-import reactive.delivery.Dispatcher
-import reactive.delivery.Dispatcher.{CourierAvailability, NumberOfCouriersToRecruitInBatches, RecruitCouriers}
+import reactive.delivery.Dispatcher.{CourierAvailability, RecruitCouriers}
 import reactive.order.Order
 import reactive.storage.ShelfManager.{CapacityUtilization, DiscardOrder}
 import reactive.storage.{PackagedProduct, ShelfManager}
 import reactive.{JacksonSerializable, KitchenActor, ShelfManagerActor}
 
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success}
 
 /**
@@ -47,14 +46,8 @@ import scala.util.{Failure, Success}
 object Kitchen {
   val TurkishCousine = "Turkish"
   val AmericanCousine = "American"
-  val DelayInMillisIfStorageIsFull = 1000
-  val DelayInMillisIfProductIsDiscarded = 1500
-  val DelayInMillisIfOverflowIsAboveThreshold = 1000
-  val OverflowUtilizationSafetyThreshold = 0.9
-  val DelayInMillisIfDispatcherIsNotAvailable = 3000
-  val DelayInMillisIfDispatcherAvailabilityBelowThreshold = 2000
 
-  def props(name: String, expectedOrdersPerSecond: Int) = Props(new Kitchen(name, expectedOrdersPerSecond))
+  def props(name: String, expectedOrdersPerSecond: Int) = Props(new Kitchen(name))
 
   case class InitializeKitchen(orderMonitor: ActorRef,
                                dispatcher: ActorRef) extends JacksonSerializable
@@ -68,13 +61,13 @@ object Kitchen {
 }
 
 
-class Kitchen(name: String, expectedOrdersPerSecond: Int) extends Actor with ActorLogging with Timers with Stash {
+class Kitchen(name: String) extends Actor with ActorLogging with Timers with Stash with Configs {
 
   import Kitchen._
   import akka.pattern.ask
   import reactive.system.dispatcher
 
-  implicit val timeout = Timeout(300 milliseconds)
+  implicit val timeout = kitchenConf.timeout
 
   override val receive: Receive = closedForService
 
@@ -86,7 +79,7 @@ class Kitchen(name: String, expectedOrdersPerSecond: Int) extends Actor with Act
           val shelfManager = context.actorOf(ShelfManager.props(self, orderMonitor), ShelfManagerActor)
           context.watch(shelfManager)
           dispatcher.tell(state.update(ComponentState(ShelfManagerActor, Operational, Some(shelfManager))), sender())
-          dispatcher ! RecruitCouriers(NumberOfCouriersToRecruitInBatches, shelfManager, orderMonitor)
+          dispatcher ! RecruitCouriers(dispatcherConf.numberOfCouriersToRecruitInBatches, shelfManager, orderMonitor)
           becomeActive(shelfManager, orderMonitor, dispatcher)
       }
 
@@ -97,17 +90,17 @@ class Kitchen(name: String, expectedOrdersPerSecond: Int) extends Actor with Act
 
   def active(shelfManager: ActorRef, orderMonitor: ActorRef, courierDispatcher: ActorRef): Receive = {
     case order: Order =>
-      val product = PackagedProduct(order)
+      val product = PackagedProduct(order, courierConf.deliveryWindow)
       log.info(s"Kitchen $name prepared order for '${order.name}' id:${order.id}. Sending it to ShelfManager for courier pickup")
-      shelfManager ! PackagedProduct(order)
+      shelfManager ! product
       courierDispatcher ! product
       orderMonitor ! product
 
-    case dispatcher: CourierAvailability if dispatcher.health < Dispatcher.MinHealthThreshold =>
-      val delay = if (dispatcher.available == 0) DelayInMillisIfDispatcherIsNotAvailable else DelayInMillisIfDispatcherAvailabilityBelowThreshold
+    case dispatcher: CourierAvailability if dispatcher.health < dispatcherConf.minimumAvailableToRecruitedCouriersRatio =>
+      val delay = if (dispatcher.available == 0) kitchenConf.suspensionDispatcherNotAvailableMillis else kitchenConf.suspensionDispatcherAvailabilityBelowThresholdMillis
       suspend(delay, shelfManager, orderMonitor, courierDispatcher)
 
-    case _: DiscardOrder => suspend(DelayInMillisIfProductIsDiscarded, shelfManager, orderMonitor, courierDispatcher)
+    case _: DiscardOrder => suspend(kitchenConf.suspensionProductDiscardedMillis, shelfManager, orderMonitor, courierDispatcher)
 
     case shelfCapacity: CapacityUtilization => checkShelfCapacity(shelfCapacity, shelfManager, orderMonitor, courierDispatcher)
 
@@ -137,7 +130,7 @@ class Kitchen(name: String, expectedOrdersPerSecond: Int) extends Actor with Act
 
     case _: DiscardOrder =>
       schedule.cancel()
-      context.become(suspendIncomingOrders(resume(self, DelayInMillisIfProductIsDiscarded), shelfManager, orderMonitor, courierDispatcher))
+      context.become(suspendIncomingOrders(resume(self, kitchenConf.suspensionProductDiscardedMillis), shelfManager, orderMonitor, courierDispatcher))
 
     case AttemptToResumeTakingOrders =>
       schedule.cancel()
@@ -151,13 +144,13 @@ class Kitchen(name: String, expectedOrdersPerSecond: Int) extends Actor with Act
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
 
-  private def suspend(delayInMillis: Int, shelfManager: ActorRef, orderMonitor: ActorRef, dispatcher: ActorRef): Unit = {
+  private def suspend(duration: FiniteDuration, shelfManager: ActorRef, orderMonitor: ActorRef, dispatcher: ActorRef): Unit = {
     context.parent ! ComponentState(KitchenActor, UnhealthyButOperational, Some(self), 0.5f)
-    context.become(suspendIncomingOrders(resume(self, delayInMillis), shelfManager, orderMonitor, dispatcher))
+    context.become(suspendIncomingOrders(resume(self, duration), shelfManager, orderMonitor, dispatcher))
   }
 
-  private def resume(kitchen: ActorRef, pauseInMillis: Int): Cancellable = {
-    context.system.scheduler.scheduleOnce(pauseInMillis millis) {
+  private def resume(kitchen: ActorRef, pauseDuration: FiniteDuration): Cancellable = {
+    context.system.scheduler.scheduleOnce(pauseDuration) {
       kitchen ! AttemptToResumeTakingOrders
     }
   }
@@ -170,9 +163,9 @@ class Kitchen(name: String, expectedOrdersPerSecond: Int) extends Actor with Act
 
   private def checkShelfCapacity(shelfCapacity: CapacityUtilization, shelfManager: ActorRef, orderMonitor: ActorRef, courierDispatcher: ActorRef, prevSchedule: Option[Cancellable] = None): Unit = {
     prevSchedule.foreach(_.cancel())
-    if (shelfCapacity.overflow > OverflowUtilizationSafetyThreshold) {
+    if (shelfCapacity.overflow > shelfManagerConf.overflowUtilizationSafetyThreshold) {
       log.debug(s"Shelf overflow capacity utilization exceeds max threshold: ${shelfCapacity.overflow}. Will temporarily pause processing orders.")
-      suspend(DelayInMillisIfOverflowIsAboveThreshold, shelfManager, orderMonitor, courierDispatcher)
+      suspend(kitchenConf.suspensionOverflowAboveThresholdMillis, shelfManager, orderMonitor, courierDispatcher)
     }
     else {
       log.debug(s"Shelf overflow capacity utilization is below max threshold: ${shelfCapacity.overflow}. Will resume taking orders.")

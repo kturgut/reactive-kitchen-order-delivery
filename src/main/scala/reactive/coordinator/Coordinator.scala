@@ -6,15 +6,15 @@ import akka.actor.SupervisorStrategy.{Escalate, Restart}
 import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, OneForOneStrategy, PoisonPill, Props, Stash, Terminated, Timers}
 import akka.routing.{ActorRefRoutee, BroadcastRoutingLogic, Router}
 import reactive._
+import reactive.config.{CoordinatorConfig, CustomerConfig, DispatcherConfig, KitchenConfig, Configs}
 import reactive.coordinator.ComponentState.State
 import reactive.customer.Customer
 import reactive.customer.Customer.SimulateOrdersFromFile
 import reactive.delivery.Dispatcher
-import reactive.delivery.Dispatcher.{CourierAvailability, NumberOfCouriersToRecruitInBatches, RecruitCouriers}
+import reactive.delivery.Dispatcher.{CourierAvailability, RecruitCouriers}
 import reactive.kitchen.Kitchen
 import reactive.order.{OrderMonitor, OrderProcessor}
 
-import scala.concurrent.duration.DurationInt
 
 case object ComponentState {
 
@@ -98,9 +98,6 @@ object Coordinator {
 
   val componentNames = Seq(OrderMonitorActor, OrderProcessorActor, KitchenActor, DispatcherActor, CustomerActor)
 
-  val MaxNumberOfOrdersPerSecond = 2 // TODO read this from config
-  def numberOfCouriersNeeded = MaxNumberOfOrdersPerSecond * 10 // TODO read from config
-
   case class StartComponent(name: String) extends JacksonSerializable
 
   case class StopComponent(name: String) extends JacksonSerializable
@@ -120,7 +117,7 @@ object Coordinator {
 }
 
 
-class Coordinator extends Actor with ActorLogging with Stash with Timers {
+class Coordinator extends Actor with ActorLogging with Stash with Timers with Configs {
 
   import Coordinator._
 
@@ -184,7 +181,7 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers {
 
     case CourierAvailability(availability, _)  =>
       if (availability == 0)
-        sender() ! RecruitCouriers(NumberOfCouriersToRecruitInBatches, state.shelfManagerOption.get, state.orderMonitorOption.get)
+        sender() ! RecruitCouriers(dispatcherConf.numberOfCouriersToRecruitInBatches, state.shelfManagerOption.get, state.orderMonitorOption.get)
 
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
@@ -202,7 +199,7 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers {
     systemState.components.values.foreach(compState => log.info(compState.toString()))
 
   def runSimulation(state: SystemState, shelfLifeMultiplier: Float, numberOfOrdersPerSecond: Int): Unit =
-    system.scheduler.scheduleOnce(InitializationTimeInMillis milliseconds) {
+    system.scheduler.scheduleOnce(coordinatorConf.initializationTimeInMillis) {
       (state.customerOption, state.orderProcessorOption) match {
         case (Some(customer), Some(orderProcessor)) =>
           log.info(s"Starting Order Simulation with $numberOfOrdersPerSecond orders per second, and shelf life multiplier:$shelfLifeMultiplier")
@@ -238,8 +235,8 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers {
   private def createHeartBeatSchedule(systemState: SystemState): Map[String, Cancellable] = systemState.activeActors.map(createHeartBeatSchedule).toMap
 
   private def createHeartBeatSchedule(actorRef: ActorRef): (String, Cancellable) =
-    actorRef.path.toStringWithoutAddress -> context.system.scheduler.scheduleOnce(5 second) {
-     // actorRef ! ReportStatus
+    actorRef.path.toStringWithoutAddress -> context.system.scheduler.scheduleOnce(coordinatorConf.heartBeatScheduleMillis) {
+      actorRef ! ReportStatus
     }
 
   private def updateSchedule(schedule: Map[String, Cancellable], heartBeat: ComponentState): Map[String, Cancellable] = {

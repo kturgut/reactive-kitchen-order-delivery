@@ -3,50 +3,48 @@ package reactive.storage
 import java.time.LocalDateTime
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Props, Timers}
-import reactive.{JacksonSerializable, OrderMonitorActor, ShelfManagerActor}
+import reactive.config.ShelfManagerConfig
 import reactive.coordinator.ComponentState.Operational
 import reactive.coordinator.Coordinator.ReportStatus
 import reactive.coordinator.{ComponentState, SystemState}
 import reactive.delivery.Courier.{CourierAssignment, Pickup, PickupRequest}
-import reactive.kitchen.Kitchen.OverflowUtilizationSafetyThreshold
 import reactive.order.{Order, Temperature}
+import reactive.{JacksonSerializable, ShelfManagerActor}
 
 import scala.collection.immutable.ListMap
 import scala.concurrent.duration.DurationInt
 
 /**
  * ShelfManager is a Stateless Actor. Parent Actor is Kitchen.
- *   Kitchen receives PackagedProducts from Kitchen and delivers them Courier that is assigned.
- *   Courier assigned for delivery sends a CourierAssignment to ShelfManager
- *   ShelfManager caches active CourierAssignments (FIFO cache with fixed size)
- *   When Couriers request Pickup if the PackagedProduct is still on the shelf it is returned, otherwise
- *   DiscardOrder is returned. ShelfManager has a cache that it tracks Courier Assignments.
+ * Kitchen receives PackagedProducts from Kitchen and delivers them Courier that is assigned.
+ * Courier assigned for delivery sends a CourierAssignment to ShelfManager
+ * ShelfManager caches active CourierAssignments (FIFO cache with fixed size)
+ * When Couriers request Pickup if the PackagedProduct is still on the shelf it is returned, otherwise
+ * DiscardOrder is returned. ShelfManager has a cache that it tracks Courier Assignments.
  *
  * ShelfManager currently does not have a mechanism put backpressure to Kitchen. It is in active state after creation.
  *
  * Timers: ShelfManager has an recurring timer that triggers ManageProductsOnShelves every one second to automatically check
- *    the contents on the shelves and move them around or discard them as necessary
+ * the contents on the shelves and move them around or discard them as necessary
  *
  * ShelfManager handles the following incoming messages:
- *    PackagedProduct => Puts the incoming package into the Overflow shelf, and starts optimization of overflow shelf.
- *       Any DiscardedOrders are published to Courier that is assigned for the package as well as to OrderProcessor
- *       for OrderLifeCycleManagement
- *    PickupRequest => Send {Pickup | DiscardOrder | None} to Courier
- *       Check Storage for the product from Storage, if found return it, if not found return None.
- *       There is a small chance that the order may have expired just recently, if so a DiscardOrder notice might be returned
- *       to Courier instead.
- *       Note that if product expiration is detected outside of this pickup request, the courier will get a direct
- *       message about the expiration and this PickupRequest will not be received.
+ * PackagedProduct => Puts the incoming package into the Overflow shelf, and starts optimization of overflow shelf.
+ * Any DiscardedOrders are published to Courier that is assigned for the package as well as to OrderProcessor
+ * for OrderLifeCycleManagement
+ * PickupRequest => Send {Pickup | DiscardOrder | None} to Courier
+ * Check Storage for the product from Storage, if found return it, if not found return None.
+ * There is a small chance that the order may have expired just recently, if so a DiscardOrder notice might be returned
+ * to Courier instead.
+ * Note that if product expiration is detected outside of this pickup request, the courier will get a direct
+ * message about the expiration and this PickupRequest will not be received.
  */
 object ShelfManager {
 
-  val MaximumCourierAssignmentCacheSize = 100
   val ExpiredShelfLife = "ExpiredShelfLife"
   val ShelfCapacityExceeded = "ShelfCapacityExceeded"
 
-  def props(kitchenRef:ActorRef, orderMonitorRef:ActorRef) = Props(new ShelfManager(kitchenRef, orderMonitorRef))
+  def props(kitchenRef: ActorRef, orderMonitorRef: ActorRef) = Props(new ShelfManager(kitchenRef, orderMonitorRef))
 
-  // TODO Turn discard reason to trait
   case class DiscardOrder(order: Order, reason: String, createdOn: LocalDateTime) extends JacksonSerializable
 
   case object TimerKey
@@ -58,25 +56,28 @@ object ShelfManager {
   case object ManageProductsOnShelves
 
   case object RequestCapacityUtilization
-  case class  CapacityUtilization(overflow:Float, allShelves:Float)
+
+  case class CapacityUtilization(overflow: Float, allShelves: Float)
+
 }
 
-class ShelfManager(kitchen:ActorRef, orderMonitor:ActorRef) extends Actor with ActorLogging with Timers {
-  log.error("SHELF MANAGER IS STARTING")
+class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef) extends Actor with ActorLogging with Timers {
 
   import ShelfManager._
 
+  val config = ShelfManagerConfig(context.system)
+
   timers.startSingleTimer(TimerKey, StartAutomaticShelfLifeOptimization, 100 millis)
 
-  override def receive: Receive = readyForService(ListMap.empty, Storage(log))
+  override def receive: Receive = readyForService(ListMap.empty, Storage(log,config.shelfConfig(),config.criticalTimeThresholdForSwappingInMillis.toMillis))
 
   def readyForService(courierAssignments: ListMap[Order, CourierAssignment], storage: Storage): Receive = {
 
-    case _:SystemState | ReportStatus =>
-      sender ! ComponentState(ShelfManagerActor,Operational, Some(self))
+    case _: SystemState | ReportStatus =>
+      sender ! ComponentState(ShelfManagerActor, Operational, Some(self))
 
     case StartAutomaticShelfLifeOptimization =>
-      timers.startTimerWithFixedDelay(TimerKey, ManageProductsOnShelves, 1 second)
+      timers.startTimerWithFixedDelay(TimerKey, ManageProductsOnShelves,  config.shelfLifeOptimizationTimerDelay)
 
     case StopAutomaticShelfLifeOptimization =>
       log.warning("Stopping Automatic Shelf Life Optimization")
@@ -84,10 +85,10 @@ class ShelfManager(kitchen:ActorRef, orderMonitor:ActorRef) extends Actor with A
 
     case ManageProductsOnShelves =>
       val updatedAssignments = publishDiscardedOrders(storage.optimizeShelfPlacement(), courierAssignments)
-      if (storage.capacityUtilization(Temperature.All) > OverflowUtilizationSafetyThreshold) {
+      if (storage.capacityUtilization(Temperature.All) > config.overflowUtilizationReportingThreshold)
         storage.reportStatus(true)
+      if (storage.capacityUtilization(Temperature.All) > config.overflowUtilizationSafetyThreshold)
         kitchen ! storage.capacityUtilization
-      }
       context.become(readyForService(updatedAssignments, storage.snapshot()))
 
     case product: PackagedProduct =>
@@ -112,7 +113,7 @@ class ShelfManager(kitchen:ActorRef, orderMonitor:ActorRef) extends Actor with A
     case assignment: CourierAssignment =>
       log.debug(s"Shelf manager received assignment: ${assignment.prettyString}")
       context.become(readyForService((
-        courierAssignments + (assignment.order -> assignment)).take(MaximumCourierAssignmentCacheSize), storage))
+        courierAssignments + (assignment.order -> assignment)).take(config.maximumCourierAssignmentCacheSize), storage))
 
     case RequestCapacityUtilization =>
       sender() ! storage.capacityUtilization
@@ -132,7 +133,7 @@ class ShelfManager(kitchen:ActorRef, orderMonitor:ActorRef) extends Actor with A
         kitchen ! discardedOrder
         assignments -= assignment.order
       case _ =>
-        orderMonitor ! discardedOrder  // notify order processor to update order lifecycle
+        orderMonitor ! discardedOrder // notify order processor to update order lifecycle
         kitchen ! discardedOrder
     })
     assignments

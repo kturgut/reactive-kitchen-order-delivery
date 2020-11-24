@@ -4,6 +4,7 @@ import java.time.LocalDateTime
 
 import akka.actor.{ActorLogging, ActorRef, Cancellable}
 import akka.persistence.{PersistentActor, RecoveryCompleted}
+import reactive.config.OrderMonitorConfig
 import reactive.coordinator.ComponentState.Operational
 import reactive.coordinator.Coordinator.ReportStatus
 import reactive.coordinator.{ComponentState, Coordinator, SystemState}
@@ -66,8 +67,6 @@ import scala.concurrent.duration.DurationInt
 
 case object OrderMonitor {
 
-  val MaximumSizeForLifeCycleCache = 200
-
   // EVENTS
   case class OrderRecord(time: LocalDateTime, order: Order) extends JacksonSerializable
 
@@ -77,12 +76,18 @@ case object OrderMonitor {
 
   case class DiscardOrderRecord(time: LocalDateTime, discard: DiscardOrder) extends JacksonSerializable
 
+  case class OrderState(orderCounter:Int, lastOrderReceived:String, productionCounter:Int, deliveryCounter:Int,
+                        discardedOrderCounter:Int, totalTipsReceived:Int,
+                        activeOrders:ListMap[String, OrderLifeCycle] = ListMap.empty) {
+  }
+
 }
 
 
 class OrderMonitor extends PersistentActor with ActorLogging {
 
   import OrderMonitor._
+  val config = OrderMonitorConfig(context.system)
 
   override val persistenceId: String = "persistentOrderProcessorId"
   var orderCounter = 0
@@ -93,7 +98,6 @@ class OrderMonitor extends PersistentActor with ActorLogging {
   var totalTipsReceived = 0
   var activeOrders: ListMap[String, OrderLifeCycle] = ListMap.empty
   var schedule = createTimeoutWindow()
-  var kitchenActorPath: String = "Unknown"
 
   // normal command handler
   override def receiveCommand(): Receive = {
@@ -211,7 +215,7 @@ class OrderMonitor extends PersistentActor with ActorLogging {
         val updatedEntry = update(lifeCycle)
         if (updatedEntry.isComplete) activeOrders else activeOrders + (order.id -> updatedEntry)
       case None => activeOrders + (order.id -> create())
-    }).take(MaximumSizeForLifeCycleCache)
+    }).take(config.MaximumOrderLifeCycleCacheSize)
 
   def reportState(state: String) = {
     log.info(s"OrderProcessor $state:")

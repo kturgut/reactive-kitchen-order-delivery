@@ -7,7 +7,7 @@ import java.time.{Duration, LocalDateTime}
 import reactive.delivery.Courier
 import reactive.order.{Order, Temperature}
 
-final case class PackagedProduct(remainingShelfLife: Float, value: Float, createdOn: LocalDateTime, updatedOn: LocalDateTime, order: Order) {
+final case class PackagedProduct(remainingShelfLife: Float, value: Float, createdOn: LocalDateTime, updatedOn: LocalDateTime, order: Order, pickupWindowInMillis:(Long,Long)) {
 
   import PackagedProduct._
 
@@ -44,14 +44,6 @@ final case class PackagedProduct(remainingShelfLife: Float, value: Float, create
     Duration.between(updatedOn, futureTime).toMillis
   }
 
-  /**
-   * How many more millis needs to pass before expected before pickup: (lowerBound,upperBound)
-   */
-  def pickupWindowInMillis(time: LocalDateTime = LocalDateTime.now()): (Long, Long) = {
-    val soonestExpectedArrival = createdOn.plus(Courier.EarliestDeliveryAfterOrderReceivedInSeconds, ChronoUnit.SECONDS)
-    val pickupTimeDiff = Duration.between(time, soonestExpectedArrival).toMillis
-    (pickupTimeDiff, pickupTimeDiff + Courier.DeliveryTimeWindowSizeInSeconds * 1000)
-  }
 }
 
 case object PackagedProduct {
@@ -60,8 +52,8 @@ case object PackagedProduct {
   implicit val ordering = PackagedProduct.IncreasingValue
   val MillliSecondsInOneSecond = 1000
 
-  def apply(order: Order, time: LocalDateTime = LocalDateTime.now()): PackagedProduct = {
-    new PackagedProduct(order.shelfLife, 1, time, time, order)
+  def apply(order: Order, deliveryWindow:(Long,Long), time: LocalDateTime = LocalDateTime.now()): PackagedProduct = {
+    new PackagedProduct(order.shelfLife, 1, time, time, order, deliveryWindow)
   }
 
   object IncreasingValue extends Ordering[PackagedProduct] {
@@ -81,9 +73,9 @@ private[storage] case class ExpirationInfo(product: PackagedProduct, ifInCurrent
     (bestTime - millisIntoFuture < 0) && (bestTime > timeInMillisTillPickup._1)
   }
 
-  def okToMove(millisIntoFuture: Long) = !willExpireForSure(millisIntoFuture) && safeToMove(millisIntoFuture)
+  def okToMove(millisIntoFuture: Long):Boolean = !willExpireForSure(millisIntoFuture) && safeToMove(millisIntoFuture)
 
-  private def safeToMove(millisIntoFuture: Long) = (ifMovedToTarget - millisIntoFuture) > timeInMillisTillPickup._1
+  private def safeToMove(millisIntoFuture: Long):Boolean = (ifMovedToTarget - millisIntoFuture) > timeInMillisTillPickup._1
 
 }
 
@@ -107,13 +99,13 @@ private[storage] case class ProductPair(inOverflow: ExpirationInfo, inTarget: Ex
    * its shelf life if moved while not putting the other at risk of being in "critical zone" identified by threshold.
    * Note that this will return false if either of these products will expireForSure.
    */
-  def swapRecommended(threshold: Int): Boolean = inOverflow.wantsToMove(threshold) && inTarget.okToMove(threshold) ||
+  def swapRecommended(threshold: Long): Boolean = inOverflow.wantsToMove(threshold) && inTarget.okToMove(threshold) ||
     inTarget.wantsToMove(threshold) && inOverflow.okToMove(threshold)
 
   /**
    * Returns true if either of the products will expire for sure if not moved within a certain time frame 'threshold'
    */
-  def inCriticalZone(threshold: Int): Boolean = inOverflow.willExpireForSure(threshold) || inTarget.willExpireForSure(threshold)
+  def inCriticalZone(threshold: Long): Boolean = inOverflow.willExpireForSure(threshold) || inTarget.willExpireForSure(threshold)
 }
 
 private[storage] case object ProductPair {
@@ -123,8 +115,8 @@ private[storage] case object ProductPair {
   def apply(p1: PackagedProduct, s1: Shelf, p2: PackagedProduct, s2: Shelf): ProductPair = {
     assert(s1.canAccept(p1.order) && s1.supports.contains(Temperature.All))
     new ProductPair(
-      ExpirationInfo(p1, p1.expirationInMillis(s1.decayModifier), p1.expirationInMillis(s2.decayModifier), p1.pickupWindowInMillis(), s1),
-      ExpirationInfo(p2, p2.expirationInMillis(s2.decayModifier), p2.expirationInMillis(s1.decayModifier), p2.pickupWindowInMillis(), s2)
+      ExpirationInfo(p1, p1.expirationInMillis(s1.decayModifier), p1.expirationInMillis(s2.decayModifier), p1.pickupWindowInMillis, s1),
+      ExpirationInfo(p2, p2.expirationInMillis(s2.decayModifier), p2.expirationInMillis(s1.decayModifier), p2.pickupWindowInMillis, s2)
     )
   }
 }

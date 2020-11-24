@@ -1,0 +1,29 @@
+package reactive.config
+
+import akka.actor.{ActorSystem, ExtendedActorSystem, Extension, ExtensionId, ExtensionIdProvider}
+import com.typesafe.config.Config
+
+import scala.concurrent.duration.{Duration, FiniteDuration}
+
+class DispatcherConfig(config: Config) extends Extension {
+
+  val minimumAvailableToRecruitedCouriersRatio = config.getDouble("minimum-available-to-recruited-couriers-ratio").toFloat
+  val numberOfCouriersToRecruitInBatches = config.getInt("number-of-couriers-to-recruit-in-batches")
+
+}
+
+
+object DispatcherConfig extends ExtensionId[DispatcherConfig] with ExtensionIdProvider {
+
+  override def lookup = DispatcherConfig
+
+  override def createExtension(system: ExtendedActorSystem) =
+    new DispatcherConfig(system.settings.config.getConfig("reactive.dispatcher"))
+
+  override def get(system: ActorSystem): DispatcherConfig = super.get(system)
+}
+
+
+
+
+

@@ -39,7 +39,7 @@ trait TestSpecHelper {
   val RoundingErrorThreshold = 0.002f
 
   def samplePackagedProduct(id:Int, customer:ActorRef, shelfLife:Int = 100, decayRate:Float=0.5f, temp:String = Hot, time:LocalDateTime=LocalDateTime.now()):PackagedProduct =
-    PackagedProduct(Order(id.toString, "Ayran", temp, shelfLife, decayRate, customer ), time)
+    PackagedProduct(Order(id.toString, "Ayran", temp, shelfLife, decayRate, customer), (2000,6000), time)
 
 
   def samplePackagedProductAndAssignment(id:Int, customer:ActorRef, courier:ActorRef):(PackagedProduct,CourierAssignment) = {

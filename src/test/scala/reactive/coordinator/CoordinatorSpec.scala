@@ -35,7 +35,7 @@ class CoordinatorSpec extends BaseSpec {
     }
   }
 
-  "An OrderProcessor" should {
+  "An Kitchen" should {
     "temporarily pause incoming order processing when Shelf capacity utilization is above threshold" in {
 
     }

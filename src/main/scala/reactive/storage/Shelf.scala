@@ -3,6 +3,7 @@ package reactive.storage
 import java.time.{LocalDateTime, ZoneId}
 
 import akka.event.LoggingAdapter
+import reactive.config.ShelfConfig
 import reactive.order.Temperature.{All, Cold, Frozen, Hot}
 import reactive.order.{Order, Temperature}
 import reactive.storage.ShelfManager.{DiscardOrder, ExpiredShelfLife}
@@ -67,8 +68,11 @@ private[storage] case object Shelf {
 
   implicit val localDateTimeOrdering: Ordering[LocalDateTime] = Ordering.by(x => x.atZone(ZoneId.of("UTC")).toEpochSecond)
 
-  def temperatureSensitiveShelves: mutable.Map[Temperature, Shelf] =
-    mutable.Map(All -> overflow(), Hot -> hot(), Cold -> cold(), Frozen -> frozen())
+  def temperatureSensitiveShelves(config: ShelfConfig): mutable.Map[Temperature, Shelf] =
+    mutable.Map(All -> overflow(config.overflowShelfCapacity, config.overflowShelfDecayModifier),
+      Hot -> hot(config.hotShelfCapacity, config.hotShelfDecayModifier),
+      Cold -> cold(config.coldShelfCapacity, config.coldShelfDecayModifier),
+      Frozen -> frozen(config.frozenShelfCapacity, config.frozenShelfDecayModifier))
 
   def hot(capacity: Int = 10, decayModifier: Int = 1) = Shelf("Hot", Hot :: Nil, capacity, decayModifier)
 

@@ -1,11 +1,11 @@
 package reactive.order
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Stash}
-import reactive.{OrderProcessorActor, ShelfManagerActor}
+import reactive.OrderProcessorActor
+import reactive.config.OrderProcessorConfig
 import reactive.coordinator.ComponentState.Operational
 import reactive.coordinator.Coordinator.ReportStatus
 import reactive.coordinator.{ComponentState, SystemState}
-import reactive.delivery.Dispatcher.{NumberOfCouriersToRecruitInBatches, RecruitCouriers}
 
 
 /**
@@ -70,7 +70,6 @@ class OrderProcessor extends Actor with ActorLogging with Stash {
 
   import OrderProcessor._
 
-  var kitchens: Map[String, ActorRef] = Map.empty
   var orderCounter = 0
 
   override def receive: Receive = closedForService(Map.empty)
@@ -103,7 +102,6 @@ class OrderProcessor extends Actor with ActorLogging with Stash {
       sender() ! OrderReceived(order.id)
       orderMonitor ! order
       orderCounter += 1
-      log.info(s"Received ${orderCounter}th order with id:${order.id} Sending it kitchen:$order")
       selectKitchenForOrder(kitchens, order) ! order
 
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")

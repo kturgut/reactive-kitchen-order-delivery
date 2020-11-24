@@ -3,15 +3,25 @@ package reactive.storage
 import java.time.LocalDateTime
 
 import akka.event.LoggingAdapter
+import reactive.config.ShelfConfig
 import reactive.order.Temperature.All
 import reactive.order.{Order, Temperature}
 import reactive.storage.ShelfManager.{CapacityUtilization, DiscardOrder, ExpiredShelfLife, ShelfCapacityExceeded}
 
 import scala.collection.mutable
+import scala.concurrent.duration.FiniteDuration
 
+private[storage] case object Storage {
+  def apply(log: LoggingAdapter, config:ShelfConfig, criticalTimeForSwapsThresholdMillis:Long):Storage = {
+    apply(log, Shelf.temperatureSensitiveShelves(config), criticalTimeForSwapsThresholdMillis)
+    new Storage(log,  Shelf.temperatureSensitiveShelves(config), criticalTimeForSwapsThresholdMillis)
+  }
+}
 
-
-private[storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[Temperature, Shelf] = Shelf.temperatureSensitiveShelves, createdOn: LocalDateTime = LocalDateTime.now()) {
+private[storage] case class Storage(log: LoggingAdapter,
+                                    shelves: mutable.Map[Temperature, Shelf],
+                                    criticalTimeForSwapsThresholdMillis:Long = 2000,
+                                    createdOn: LocalDateTime = LocalDateTime.now()) {
 
   assert(shelves.contains(All), "Overflow shelf not registered")
   assert(tempSensitiveShelves.values.forall(_.decayModifier <= overflow.decayModifier),
@@ -19,7 +29,6 @@ private[storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[Te
 
   private lazy val overflow: Shelf = shelves(All)
   private lazy val tempSensitiveShelves: mutable.Map[Temperature, Shelf] = shelves - All
-  val CriticalTimeThresholdForSwappingInMillis = 2000
 
   def isOverflowFull() = !hasAvailableSpaceFor(Temperature.All)
   lazy val totalCapacity = shelves.map(_._2.capacity).sum
@@ -114,7 +123,7 @@ private[storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[Te
     if (overflow.overCapacity) {
       var productPairs: List[ProductPair] = pairProductsForPotentialSwap()
       discarded = discardProductsThatWillExpireBeforeEarliestPossiblePickup(productPairs, time)
-      productPairs = swapPairsOfProductsInCriticalZone(productPairs, time, CriticalTimeThresholdForSwappingInMillis)
+      productPairs = swapPairsOfProductsInCriticalZone(productPairs, time)
       while (overflow.overCapacity) {
         discarded = discardDueToOverCapacity(overflow.productsDecreasingByOrderDate.head, overflow, time) :: discarded
       }
@@ -164,10 +173,9 @@ private[storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[Te
   }
 
   private def swapPairsOfProductsInCriticalZone(pairedProducts: List[ProductPair],
-                                                time: LocalDateTime,
-                                                criticalZoneThreshold: Int = CriticalTimeThresholdForSwappingInMillis): List[ProductPair] = {
+                                                time: LocalDateTime): List[ProductPair] = {
     for (pair <- pairedProducts.filter(pair =>
-      pair.inCriticalZone(criticalZoneThreshold) && pair.swapRecommended(criticalZoneThreshold))) yield {
+      pair.inCriticalZone(criticalTimeForSwapsThresholdMillis) && pair.swapRecommended(criticalTimeForSwapsThresholdMillis))) yield {
       moveProductToTargetShelfMaintainingCapacity(pair.overflow, pair.inOverflow.product, pair.target, time) match {
         case Some(productOnShelf) => pair.overflow += productOnShelf.phantomCopy(overflow.decayModifier, time)
         case None =>
@@ -209,7 +217,7 @@ private[storage] case class Storage(log: LoggingAdapter, shelves: mutable.Map[Te
    */
   def snapshot(time: LocalDateTime = LocalDateTime.now()): Storage = {
     refresh(time)
-    copy(log, shelves.clone(), time)
+    copy(log, shelves.clone(), criticalTimeForSwapsThresholdMillis,time)
   }
 
   def reportStatus(verbose: Boolean = false, time: LocalDateTime = LocalDateTime.now()): Unit = {

@@ -13,6 +13,6 @@ object Reactive extends App {
 
   val demo = system.actorOf(Props[Coordinator], CoordinatorActor)
   demo ! Initialize
-  demo ! RunSimulation(100, 0.1f)
+  demo ! RunSimulation(2, 0.1f)
 
 }
