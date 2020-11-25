@@ -4,7 +4,7 @@ import java.time.LocalDateTime
 
 import akka.actor.{ActorLogging, ActorRef, Cancellable}
 import akka.event.LoggingAdapter
-import akka.persistence.{DeleteMessagesFailure, DeleteMessagesSuccess, PersistentActor, RecoveryCompleted, SaveSnapshotFailure, SaveSnapshotSuccess, SnapshotOffer}
+import akka.persistence.{DeleteMessagesFailure, DeleteMessagesSuccess, PersistentActor, RecoveryCompleted, SaveSnapshotFailure, SaveSnapshotSuccess, SnapshotOffer, SnapshotSelectionCriteria}
 import reactive.config.OrderMonitorConfig
 import reactive.coordinator.ComponentState.Operational
 import reactive.coordinator.Coordinator.ReportStatus
@@ -13,6 +13,7 @@ import reactive.delivery.Courier.DeliveryComplete
 import reactive.storage.PackagedProduct
 import reactive.storage.ShelfManager.DiscardOrder
 import reactive.{JacksonSerializable, OrderMonitorActor}
+import sun.tools.jconsole.ProxyClient.SnapshotMBeanServerConnection
 
 import scala.collection.immutable.ListMap
 import scala.concurrent.duration.DurationInt
@@ -68,6 +69,14 @@ import scala.concurrent.duration.DurationInt
 
 case object OrderMonitor {
 
+  case object ResetDatabase
+
+  /**
+   * Request cached state for a given order id. Since cache size is limited, You can also do persistent query if not in cache
+   */
+  case class RequestOrderLifeCycle(idOption:Option[Int]=None) extends JacksonSerializable
+  case object OrderLifeCycleNotFoundInCache
+
   // EVENTS
 
   sealed trait Event extends JacksonSerializable
@@ -108,14 +117,14 @@ case object OrderMonitor {
           copy(discardedOrderCounter=discardedOrderCounter + 1,
             eventCounter=eventCounter+1,
             activeOrders=updateCache(discard.order,
-              (lifeCycle: OrderLifeCycle) => lifeCycle.update(discard, log),() =>OrderLifeCycle(discard.order, Some(discard.order)),maxCacheSize))
+              (lifeCycle: OrderLifeCycle) => lifeCycle.update(discard, log),() =>OrderLifeCycle(discard.order, None, None,Some(discard)),maxCacheSize))
 
         case DeliveryCompleteRecord(_,delivery) =>
           copy(totalTipsReceived=totalTipsReceived + delivery.acceptance.tips,
             deliveryCounter = deliveryCounter  + 1,
             eventCounter=eventCounter + 1,
             activeOrders=updateCache(delivery.product.order,
-              (lifeCycle: OrderLifeCycle) => lifeCycle.update(delivery, log), () => OrderLifeCycle(delivery.assignment.order, Some(delivery.assignment)),maxCacheSize))
+              (lifeCycle: OrderLifeCycle) => lifeCycle.update(delivery, log), () => OrderLifeCycle(delivery.assignment.order, None, Some(delivery)),maxCacheSize))
       }
     }
 
@@ -165,8 +174,6 @@ class OrderMonitor extends PersistentActor with ActorLogging {
     case _:SystemState | ReportStatus =>
       sender ! ComponentState(OrderMonitorActor,Operational, Some(self))
 
-    case Coordinator.Shutdown => context.stop(self)
-
     case order: Order =>
       val event = OrderRecord(LocalDateTime.now(), order)
       persist(event) { event =>
@@ -195,7 +202,19 @@ class OrderMonitor extends PersistentActor with ActorLogging {
         updateState(event)
       }
 
-    case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
+    case request:RequestOrderLifeCycle =>
+      log.debug(s"Responding to order life cycle info request")
+      val id = request.idOption.getOrElse(state.lastOrderReceived).toString
+      sender() ! state.activeOrders.getOrElse(id, OrderLifeCycleNotFoundInCache)
+
+    case Coordinator.Shutdown =>
+      context.stop(self)
+
+    case ResetDatabase =>
+      log.warning("!!!Resetting OrderLifeCycle persistent store!!!!")
+      this.deleteMessages(Long.MaxValue)
+      this.deleteSnapshots(SnapshotSelectionCriteria.Latest)
+
   }
 
   /**

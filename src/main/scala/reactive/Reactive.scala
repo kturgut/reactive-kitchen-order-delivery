@@ -7,12 +7,10 @@ trait JacksonSerializable
 
 object Reactive extends App {
 
-
-
   import reactive.coordinator.Coordinator._
 
   val demo = system.actorOf(Props[Coordinator], CoordinatorActor)
   demo ! Initialize
-  demo ! RunSimulation(4, 0.1f)
+  demo ! RunSimulation(numberOfOrdersPerSecond = 10, shelfLifeMultiplier = 0.1f, limit=200, resetDB = false)
 
 }

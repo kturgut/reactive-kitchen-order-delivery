@@ -4,10 +4,16 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.time.{Duration, LocalDateTime}
 
+import reactive.JacksonSerializable
 import reactive.delivery.Courier
 import reactive.order.{Order, Temperature}
 
-final case class PackagedProduct(remainingShelfLife: Float, value: Float, createdOn: LocalDateTime, updatedOn: LocalDateTime, order: Order, pickupWindowInMillis:(Long,Long)) {
+final case class PackagedProduct(remainingShelfLife: Float,
+                                 value: Float,
+                                 createdOn: LocalDateTime,
+                                 updatedOn: LocalDateTime,
+                                 order: Order,
+                                 pickupWindowInMillis:(Long,Long)) extends JacksonSerializable{
 
   import PackagedProduct._
 

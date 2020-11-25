@@ -85,6 +85,7 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef) extends Actor with
 
     case ManageProductsOnShelves =>
       val updatedAssignments = publishDiscardedOrders(storage.optimizeShelfPlacement(), courierAssignments)
+      log.debug(s"OVERFLOW PRODUCT SIZE: ${storage.shelves(Temperature.All).products.size}")
       if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationReportingThreshold)
         storage.reportStatus(true)
       if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationSafetyThreshold)

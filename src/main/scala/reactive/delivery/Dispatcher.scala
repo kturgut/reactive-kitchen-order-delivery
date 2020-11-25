@@ -94,12 +94,12 @@ class Dispatcher extends Actor with Stash with ActorLogging {
       context.become(active(orderMonitor, shelfManager, router.addRoutee(ref).removeRoutee(ref), lastCourierId))
 
     case OnAssignment(courierRef) =>
-      log.info(s"Courier ${courierRef.path} is now on assignment. Removed from dispatch crew")
+      log.info(s"Courier ${courierRef.path} is now on assignment. Removed from dispatch crew. Total available couriers ${router.routees.size}")
       self.tell(ReportAvailability, context.parent)
       context.become(active(orderMonitor, shelfManager, router.removeRoutee(courierRef), lastCourierId))
 
     case Available(courierRef) =>
-      log.info(s"Courier ${courierRef.path} is now available. Added to dispatch crew")
+      log.info(s"Courier ${courierRef.path} is now available. Added to dispatch crew. Total available couriers ${router.routees.size}")
       context.become(active(orderMonitor, shelfManager, router.addRoutee(courierRef), lastCourierId))
 
     // reroute if courier declines
@@ -131,14 +131,14 @@ class Dispatcher extends Actor with Stash with ActorLogging {
   def asBroadcastRouter(router: Router) = router.copy(logic = BroadcastRoutingLogic())
 
   def recruitCouriers(demand: RecruitCouriers, lastCourierId: Int = 0) = {
-    val finalCourierId = lastCourierId + demand.numberOfCouriers
+    val finalCourierId = math.min(lastCourierId + demand.numberOfCouriers,config.MaximumNumberOfCouriers)
     val slaves = for (id <- lastCourierId + 1 to finalCourierId) yield {
       val courier = context.actorOf(Courier.props(s"Courier_$id", demand.orderMonitor, demand.shelfManager), s"Courier_$id")
       context.watch(courier)
       ActorRefRoutee(courier)
     }
     val router = Router(RoundRobinRoutingLogic(), slaves)
-    log.info(s"CourierDispatcher connected with OrderProcessor and kitchen '${demand.shelfManager.path.toStringWithoutAddress}'. Ready for service with ${slaves.size} couriers!")
+    log.info(s"CourierDispatcher ready for service with ${slaves.size} couriers out of $finalCourierId total!")
     self.tell(ReportAvailability, context.parent)
     self.tell(ReportStatus, context.parent)
     unstashAll()

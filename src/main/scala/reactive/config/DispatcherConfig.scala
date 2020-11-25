@@ -3,12 +3,11 @@ package reactive.config
 import akka.actor.{ActorSystem, ExtendedActorSystem, Extension, ExtensionId, ExtensionIdProvider}
 import com.typesafe.config.Config
 
-import scala.concurrent.duration.{Duration, FiniteDuration}
-
 class DispatcherConfig(config: Config) extends Extension {
 
   val MinimumAvailableToRecruitedCouriersRatio = config.getDouble("minimum-available-to-recruited-couriers-ratio").toFloat
   val NumberOfCouriersToRecruitInBatches = config.getInt("number-of-couriers-to-recruit-in-batches")
+  val MaximumNumberOfCouriers = config.getInt("max-number-of-couriers")
 
 }
 

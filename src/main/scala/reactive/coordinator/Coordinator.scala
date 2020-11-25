@@ -2,17 +2,18 @@ package reactive.coordinator
 
 import java.time.LocalDateTime
 
-import akka.actor.SupervisorStrategy.{Escalate, Restart}
+import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, OneForOneStrategy, PoisonPill, Props, Stash, Terminated, Timers}
 import akka.routing.{ActorRefRoutee, BroadcastRoutingLogic, Router}
 import reactive._
-import reactive.config.{CoordinatorConfig, CustomerConfig, DispatcherConfig, KitchenConfig, Configs}
+import reactive.config.Configs
 import reactive.coordinator.ComponentState.State
 import reactive.customer.Customer
 import reactive.customer.Customer.SimulateOrdersFromFile
 import reactive.delivery.Dispatcher
 import reactive.delivery.Dispatcher.{CourierAvailability, RecruitCouriers}
 import reactive.kitchen.Kitchen
+import reactive.order.OrderMonitor.{RequestOrderLifeCycle, ResetDatabase}
 import reactive.order.{OrderMonitor, OrderProcessor}
 
 
@@ -102,7 +103,13 @@ object Coordinator {
 
   case class StopComponent(name: String) extends JacksonSerializable
 
-  case class RunSimulation(numberOfOrdersPerSecond: Int = 2, shelfLifeMultiplier: Float = 1)
+  /**
+   * @param numberOfOrdersPerSecond How many records will be send in one second
+   * @param shelfLifeMultiplier To modify the shelf life on Orders read from file. Value range: (0,1]
+   * @param limit How many records to be sent to Order Processor, by default all will be sent
+   * @param resetDB Whether or not to reset the OrderMonitor's persistent database which tracks order lifecycle.
+   */
+  case class RunSimulation(numberOfOrdersPerSecond: Int = 2, shelfLifeMultiplier: Float = 1, limit:Int=Int.MaxValue, resetDB: Boolean = false)
 
   case object Initialize
 
@@ -121,12 +128,12 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
 
   import Coordinator._
 
-
-  // TODO define custom exceptions such as detecting slow services and partitioning of
-  //  nodes and raise exceptions to be handled by this supervisor
+  /**
+   * Default supervision strategy on component failure is Restart
+   * This can be customized for specific exceptions
+   */
   override val supervisorStrategy = OneForOneStrategy() {
-    case _: NullPointerException => Restart
-    case _: Exception => Escalate
+    case _: Exception => Restart
   }
 
   override def receive: Receive = closedForService(SystemState.apply(componentNames))
@@ -157,21 +164,23 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
 
     case StartComponent(name) => startComponent(name, state)
 
+    case ReportStatus => sender() ! state
+
     case Shutdown =>
       log.info("Gracefully Shutting down ReactiveKitchens!")
       heartBeatSchedule.values.foreach(_.cancel())
-      // OrderMonitor is persistent actor. Needs special message.
+      // OrderMonitor is persistent actor. Needs special message to shutdown gracefully
       state.orderMonitorOption match {
         case Some(orderMonitor) =>
           orderMonitor ! Shutdown
-          broadcastRouter(state.terminated(orderMonitor)).route(PoisonPill,sender())
+          broadcastRouter(state.terminated(orderMonitor)).route(PoisonPill, sender())
         case None => broadcastRouter(state).route(PoisonPill, sender())
       }
 
     case StopComponent(name) =>
       log.info(s"Stopping component $name")
-      heartBeatSchedule.filter(entry=>entry._1.contains(name)).foreach(_._2.cancel())
-      if (name==OrderMonitor)
+      heartBeatSchedule.filter(entry => entry._1.contains(name)).foreach(_._2.cancel())
+      if (name == OrderMonitor)
         state.orderMonitorOption.foreach(_ ! Shutdown)
       else
         state.get(name).actor.foreach(componentRef => context.stop(componentRef))
@@ -180,17 +189,17 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
       log.info(s"Component with ref ${ref.path} is terminated")
       context.become(openForService(state.terminated(ref), heartBeatSchedule - ref.path.toStringWithoutAddress))
 
-    case RunSimulation(ordersPerSecond, shelfLifeMultiplier) =>
-      runSimulation(state, shelfLifeMultiplier, ordersPerSecond)
+    case RunSimulation(ordersPerSecond, shelfLifeMultiplier, limit, resetDB) =>
+      runSimulation(state, shelfLifeMultiplier, ordersPerSecond, limit, resetDB)
 
     case componentState: ComponentState => evaluateState(state.update(componentState))
       val updatedState = evaluateState(state.update(componentState))
       log.debug(s"Received update: $componentState")
       context.become(openForService(updatedState, updateSchedule(heartBeatSchedule, componentState)))
 
-    case CourierAvailability(availability, _)  =>
-      if (availability == 0)
-        sender() ! RecruitCouriers(dispatcherConf.NumberOfCouriersToRecruitInBatches, state.shelfManagerOption.get, state.orderMonitorOption.get)
+    case CourierAvailability(availability, _) =>
+//      if (availability == 0)
+//        sender() ! RecruitCouriers(dispatcherConf.NumberOfCouriersToRecruitInBatches, state.shelfManagerOption.get, state.orderMonitorOption.get)
 
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
@@ -207,16 +216,27 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
   def reportState(systemState: SystemState): Unit =
     systemState.components.values.foreach(compState => log.info(compState.toString()))
 
-  def runSimulation(state: SystemState, shelfLifeMultiplier: Float, numberOfOrdersPerSecond: Int): Unit =
+  /**
+   * Tell OrderMonitor to send latest received order to Customer so it can fix the order ids read from the file.
+   * Reset DB if requested
+   * Tell Customer to send orders from file controlling throttle and shelf life multiplier.
+   * * */
+  def runSimulation(state: SystemState, shelfLifeMultiplier: Float, numberOfOrdersPerSecond: Int, limit:Int, resetDB: Boolean): Unit = {
+    (state.customerOption, state.orderMonitorOption) match {
+      case (Some(customer), Some(orderMonitor)) =>
+        orderMonitor.tell(RequestOrderLifeCycle(), customer)
+        if (resetDB) orderMonitor ! ResetDatabase
+      case _ =>
+    }
     system.scheduler.scheduleOnce(coordinatorConf.InitializationTimeInMillis) {
       (state.customerOption, state.orderProcessorOption) match {
         case (Some(customer), Some(orderProcessor)) =>
           log.info(s"Starting Order Simulation with $numberOfOrdersPerSecond orders per second, and shelf life multiplier:$shelfLifeMultiplier")
-          customer ! SimulateOrdersFromFile(orderProcessor, numberOfOrdersPerSecond, shelfLifeMultiplier)
+          customer ! SimulateOrdersFromFile(orderProcessor, numberOfOrdersPerSecond, shelfLifeMultiplier, limit)
         case _ => log.error("Initialization not complete to start Customer simulation")
       }
     }
-
+  }
 
   def startComponent(name: String, state: SystemState): Unit = {
     assert(componentNames.contains(name), s"Unknown component name:$name")

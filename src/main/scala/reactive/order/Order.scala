@@ -32,7 +32,7 @@ case class Order(id: String,
                  decayRate: Float,
                  customer: ActorRef,
                  createdOn: LocalDateTime = LocalDateTime.now()
-                ) {
+                ) extends JacksonSerializable {
   override def toString: String = s"Order (name:$name, temp:$temp, shelfLife:$shelfLife secs, decayRate:$decayRate, id:$id)"
 
   def temperature: Temperature = temp.toLowerCase() match {
@@ -67,7 +67,7 @@ case object Order {
 
 
 case class OrderLifeCycle(order: Order,
-                          product: Option[Product] = None,
+                          product: Option[PackagedProduct] = None,
                           delivery: Option[DeliveryComplete] = None,
                           discard: Option[DiscardOrder] = None) extends JacksonSerializable {
 

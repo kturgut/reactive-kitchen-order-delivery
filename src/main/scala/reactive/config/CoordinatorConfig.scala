@@ -8,7 +8,7 @@ import scala.concurrent.duration.{Duration, FiniteDuration}
 
 
 
-class CoordinatorConfig(config: Config) extends Extension {
+class CoordinatorConfig(config: Config) extends Extension with ConfigBase {
 
   implicit def toFiniteDuration(d: java.time.Duration): FiniteDuration = Duration.fromNanos(d.toNanos)
 
