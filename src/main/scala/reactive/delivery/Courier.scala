@@ -99,7 +99,7 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
       val courier = self
       val assignment = CourierAssignment(product.order, name, courier)
 
-      log.info(s"$name received order to pickup product: ${product.order.name}")
+      log.info(s"$name received order to pickup product: ${product.order.name} id:${product.order.id}")
       shelfManager ! assignment
       context.parent ! OnAssignment(self)
       context.become(onDelivery(reminderToDeliver(self), assignment))
@@ -115,6 +115,7 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
       becomeAvailable(scheduledAction)
 
     case DeliverNow =>
+log.error("SENDING PICKUP REQUEST")
       val future = shelfManager ? PickupRequest(assignment)
       val action = scheduledAction // !!? Do not use scheduleAction directly as future may be executed on different thread
       future.onComplete {

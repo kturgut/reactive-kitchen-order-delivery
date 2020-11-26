@@ -8,12 +8,13 @@ import reactive.JacksonSerializable
 import reactive.delivery.Courier
 import reactive.order.{Order, Temperature}
 
+
 final case class PackagedProduct(remainingShelfLife: Float,
                                  value: Float,
                                  createdOn: LocalDateTime,
                                  updatedOn: LocalDateTime,
                                  order: Order,
-                                 pickupWindowInMillis:(Long,Long)) extends JacksonSerializable{
+                                 initialDeliveryWindow:(Long,Long)) extends JacksonSerializable{
 
   import PackagedProduct._
 
@@ -48,6 +49,16 @@ final case class PackagedProduct(remainingShelfLife: Float,
       futureTime = futureTime.plus(incrementInMillis, ChronoUnit.MILLIS)
     }
     Duration.between(updatedOn, futureTime).toMillis
+  }
+
+  /**
+   * How many more millis needs to pass before expected before pickup: (lowerBound,upperBound)
+   * TODO merge this into initialDeliveryWindow
+   */
+  def pickupWindowInMillis(time: LocalDateTime = LocalDateTime.now()): (Long, Long) = {
+    val soonestExpectedArrival = createdOn.plus(initialDeliveryWindow._1, ChronoUnit.MILLIS)
+    val pickupTimeDiff = Duration.between(time, soonestExpectedArrival).toMillis
+    (pickupTimeDiff, pickupTimeDiff + initialDeliveryWindow._2 * 1000)
   }
 
 }
@@ -121,8 +132,8 @@ private[storage] case object ProductPair {
   def apply(p1: PackagedProduct, s1: Shelf, p2: PackagedProduct, s2: Shelf): ProductPair = {
     assert(s1.canAccept(p1.order) && s1.supports.contains(Temperature.All))
     new ProductPair(
-      ExpirationInfo(p1, p1.expirationInMillis(s1.decayModifier), p1.expirationInMillis(s2.decayModifier), p1.pickupWindowInMillis, s1),
-      ExpirationInfo(p2, p2.expirationInMillis(s2.decayModifier), p2.expirationInMillis(s1.decayModifier), p2.pickupWindowInMillis, s2)
+      ExpirationInfo(p1, p1.expirationInMillis(s1.decayModifier), p1.expirationInMillis(s2.decayModifier), p1.pickupWindowInMillis(), s1),
+      ExpirationInfo(p2, p2.expirationInMillis(s2.decayModifier), p2.expirationInMillis(s1.decayModifier), p2.pickupWindowInMillis(), s2)
     )
   }
 }

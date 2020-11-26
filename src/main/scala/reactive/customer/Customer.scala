@@ -84,7 +84,7 @@ class Customer extends Actor with ActorLogging {
                              maxNumberOfOrdersPerSecond: Int = 2,
                              shelfLifeMultiplier: Float,
                              limit: Int): Unit = {
-    implicit val timeout = Timeout(3 seconds)
+    implicit val timeout = config.timeout
     implicit val system = context.system
     val orderHandlerFlow = Flow[Order].ask[OrderReceived](4)(orderHandler)
 

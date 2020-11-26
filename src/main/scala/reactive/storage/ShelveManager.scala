@@ -8,6 +8,7 @@ import reactive.coordinator.ComponentState.Operational
 import reactive.coordinator.Coordinator.ReportStatus
 import reactive.coordinator.{ComponentState, SystemState}
 import reactive.delivery.Courier.{CourierAssignment, Pickup, PickupRequest}
+import reactive.delivery.Dispatcher.ReportAvailability
 import reactive.order.{Order, Temperature}
 import reactive.{JacksonSerializable, ShelfManagerActor}
 
@@ -43,7 +44,8 @@ object ShelfManager {
   val ExpiredShelfLife = "ExpiredShelfLife"
   val ShelfCapacityExceeded = "ShelfCapacityExceeded"
 
-  def props(kitchenRef: ActorRef, orderMonitorRef: ActorRef) = Props(new ShelfManager(kitchenRef, orderMonitorRef))
+  def props(kitchenRef: ActorRef, orderMonitorRef: ActorRef, dispatcher:ActorRef) =
+    Props(new ShelfManager(kitchenRef, orderMonitorRef,dispatcher))
 
   case class DiscardOrder(order: Order, reason: String, createdOn: LocalDateTime) extends JacksonSerializable
 
@@ -61,7 +63,7 @@ object ShelfManager {
 
 }
 
-class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef) extends Actor with ActorLogging with Timers {
+class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorRef) extends Actor with ActorLogging with Timers {
 
   import ShelfManager._
 
@@ -74,7 +76,7 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef) extends Actor with
   def readyForService(courierAssignments: ListMap[Order, CourierAssignment], storage: Storage): Receive = {
 
     case _: SystemState | ReportStatus =>
-      sender ! ComponentState(ShelfManagerActor, Operational, Some(self))
+      sender ! ComponentState(ShelfManagerActor, Operational, Some(self), 1f - storage.shelves(Temperature.All).products.size / storage.shelves(Temperature.All).capacity)
 
     case StartAutomaticShelfLifeOptimization =>
       timers.startTimerWithFixedDelay(TimerKey, ManageProductsOnShelves,  config.ShelfLifeOptimizationTimerDelay)
@@ -84,6 +86,7 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef) extends Actor with
       timers.cancel(TimerKey)
 
     case ManageProductsOnShelves =>
+      dispatcher.tell(ReportAvailability, kitchen)
       val updatedAssignments = publishDiscardedOrders(storage.optimizeShelfPlacement(), courierAssignments)
       log.debug(s"OVERFLOW PRODUCT SIZE: ${storage.shelves(Temperature.All).products.size}")
       if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationReportingThreshold)

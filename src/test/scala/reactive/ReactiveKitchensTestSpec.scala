@@ -27,6 +27,7 @@ trait TestSpecHelper {
 
   val CourierName = "HardWorking"
   val OrderProcessorName = "OrderProcessor"
+  val OrderMonitorName = "OrderMonitor"
   val ShelfManagerName = "ShelfManager"
   val KitchenName = "Kitchen"
   val DispatcherName = "Dispatcher"

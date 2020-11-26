@@ -1,7 +1,7 @@
 package reactive.delivery
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Stash, Terminated}
-import akka.routing.{ActorRefRoutee, BroadcastRoutingLogic, RoundRobinRoutingLogic, Router}
+import akka.routing.{ActorRefRoutee, BroadcastRoutingLogic, RoundRobinRoutingLogic, Routee, Router}
 import reactive.DispatcherActor
 import reactive.config.DispatcherConfig
 import reactive.coordinator.ComponentState.{Initializing, Operational, State, UnhealthyButOperational}
@@ -39,19 +39,13 @@ import reactive.storage.PackagedProduct
 
 object Dispatcher {
 
-  case class RecruitCouriersForKitchen(kitchenName: String, numberOfCouriers: Int, shelfManager: ActorRef, orderMonitor: ActorRef, orderProcessor: ActorRef)
-
   case class RecruitCouriers(numberOfCouriers: Int, shelfManager: ActorRef, orderMonitor: ActorRef)
 
   case class CourierAvailability(available: Int, total: Int) {
-    def health = available.toFloat / total
-
+    def health:Float = available.toFloat / total
     def state(config:DispatcherConfig): State = if (health < config.MinimumAvailableToRecruitedCouriersRatio) UnhealthyButOperational else Operational
   }
-
   case object ReportAvailability
-
-
 }
 
 class Dispatcher extends Actor with Stash with ActorLogging {
@@ -78,7 +72,7 @@ class Dispatcher extends Actor with Stash with ActorLogging {
       }
 
     case recruitOrder: RecruitCouriers =>
-      recruitCouriers(recruitOrder, 0)
+      recruitCouriers(recruitOrder, 0, Router(RoundRobinRoutingLogic()))
 
     case _ =>
       log.info(s"CourierDispatcher is not active. Stashing all messages")
@@ -87,25 +81,26 @@ class Dispatcher extends Actor with Stash with ActorLogging {
 
   def active(orderMonitor: ActorRef, shelfManager: ActorRef, router: Router, lastCourierId: Int): Receive = {
     case Terminated(ref) =>
-      log.warning(s"Courier '${ref.path.name}' is terminated, creating replacement!")
+      log.warning(s"Courier '${ref.path.name}' is terminated!")
       val newCourier = context.actorOf(
         Courier.props(s"Replacement for ${ref.path.name})", orderMonitor, shelfManager), s"${ref.path.name}_replacement")
       context.watch(newCourier)
-      context.become(active(orderMonitor, shelfManager, router.addRoutee(ref).removeRoutee(ref), lastCourierId))
+      becomeActivate(orderMonitor, shelfManager, router.addRoutee(newCourier).removeRoutee(ref), lastCourierId)
 
     case OnAssignment(courierRef) =>
-      log.info(s"Courier ${courierRef.path} is now on assignment. Removed from dispatch crew. Total available couriers ${router.routees.size}")
-      self.tell(ReportAvailability, context.parent)
-      context.become(active(orderMonitor, shelfManager, router.removeRoutee(courierRef), lastCourierId))
+      log.info(s"Courier ${courierRef.path} is now on assignment. Total available couriers ${router.routees.size}/$lastCourierId")
+      becomeActivate(orderMonitor, shelfManager, router.removeRoutee(courierRef), lastCourierId)
 
     case Available(courierRef) =>
-      log.info(s"Courier ${courierRef.path} is now available. Added to dispatch crew. Total available couriers ${router.routees.size}")
+      log.info(s"Courier ${courierRef.path} is now available. Total available couriers ${router.routees.size}/$lastCourierId")
       context.become(active(orderMonitor, shelfManager, router.addRoutee(courierRef), lastCourierId))
 
     // reroute if courier declines
     case DeclineCourierAssignment(courierRef, product, originalSender) =>
       log.debug(s"Courier declined $courierRef assignment to $product.")
-      router.route(product, originalSender)
+      val newRouter = router.removeRoutee(courierRef)
+      newRouter.route(product, originalSender)
+      becomeActivate(orderMonitor, shelfManager, newRouter, lastCourierId)
 
     case ReportStatus =>
       sender() ! ComponentState(DispatcherActor, CourierAvailability(router.routees.size, lastCourierId).state(config), Some(self))
@@ -114,35 +109,47 @@ class Dispatcher extends Actor with Stash with ActorLogging {
       sender() ! CourierAvailability(router.routees.size, lastCourierId)
 
     case product: PackagedProduct =>
-      log.debug(s"Dispatcher routing order with id:${product.order.id} to one of ${router.routees.size} available couriers.")
+      log.debug(s"Dispatcher routing order with id:${product.order.id}. Total available couriers ${router.routees.size}/$lastCourierId. Available: ${available(router)}")
       router.route(product, sender())
 
     case recruitOrder: RecruitCouriers =>
-      recruitCouriers(recruitOrder, lastCourierId)
+      recruitCouriers(recruitOrder, lastCourierId, router)
 
     case message =>
       log.error(s"Unrecognized message received from $sender. The message: $message")
 
   }
 
+  def becomeActivate(orderMonitor: ActorRef, shelfManager: ActorRef, router: Router, lastCourierId: Int) = {
+    val availability = CourierAvailability(router.routees.size, lastCourierId)
+    if (availability.available == 0 && availability.total < config.MaximumNumberOfCouriers) {
+      self ! RecruitCouriers(config.NumberOfCouriersToRecruitInBatches, shelfManager, orderMonitor)
+    }
+    if (availability.health < config.MinimumAvailableToRecruitedCouriersRatio)
+      context.parent ! availability
+    context.become(active(orderMonitor, shelfManager, router,lastCourierId))
+  }
+
   /**
-   * It is possible to broadcast messages to couriers as well if needed
+   * Use it to broadcast messages to all couriers at once
    */
   def asBroadcastRouter(router: Router) = router.copy(logic = BroadcastRoutingLogic())
 
-  def recruitCouriers(demand: RecruitCouriers, lastCourierId: Int = 0) = {
+  def recruitCouriers(demand: RecruitCouriers, lastCourierId: Int = 0, oldRouter:Router) = {
     val finalCourierId = math.min(lastCourierId + demand.numberOfCouriers,config.MaximumNumberOfCouriers)
-    val slaves = for (id <- lastCourierId + 1 to finalCourierId) yield {
+    val newSlaves = for (id <- lastCourierId + 1 to finalCourierId) yield {
       val courier = context.actorOf(Courier.props(s"Courier_$id", demand.orderMonitor, demand.shelfManager), s"Courier_$id")
       context.watch(courier)
       ActorRefRoutee(courier)
     }
-    val router = Router(RoundRobinRoutingLogic(), slaves)
-    log.info(s"CourierDispatcher ready for service with ${slaves.size} couriers out of $finalCourierId total!")
-    self.tell(ReportAvailability, context.parent)
-    self.tell(ReportStatus, context.parent)
+    val router = Router(RoundRobinRoutingLogic(), oldRouter.routees ++ newSlaves)
+    log.info(s"Dispatcher ready for service with ${router.routees.size} couriers out of $finalCourierId total!")
     unstashAll()
     context.become(active(demand.orderMonitor, demand.shelfManager, router, finalCourierId))
+  }
+
+  def available(router:Router):String = {
+    router.routees.mkString(",")
   }
 
 }

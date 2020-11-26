@@ -7,11 +7,10 @@ import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, OneForOneStrategy
 import akka.routing.{ActorRefRoutee, BroadcastRoutingLogic, Router}
 import reactive._
 import reactive.config.Configs
-import reactive.coordinator.ComponentState.State
+import reactive.coordinator.ComponentState.{Operational, State}
 import reactive.customer.Customer
 import reactive.customer.Customer.SimulateOrdersFromFile
 import reactive.delivery.Dispatcher
-import reactive.delivery.Dispatcher.{CourierAvailability, RecruitCouriers}
 import reactive.kitchen.Kitchen
 import reactive.order.OrderMonitor.{RequestOrderLifeCycle, ResetDatabase}
 import reactive.order.{OrderMonitor, OrderProcessor}
@@ -37,8 +36,13 @@ case object ComponentState {
 
 }
 
-case class ComponentState(key: String, state: State, actor: Option[ActorRef] = None, health: Float = 0f, updatedOn: LocalDateTime = LocalDateTime.now, lastOperational: Option[LocalDateTime] = None) {
-  override def toString() = s"Component $key is $state at ${if (actor.isDefined) actor.get.path.toStringWithoutAddress else "_"} health:$health, lastUpdate: $updatedOn"
+case class ComponentState(key: String, state: State,
+                          actor: Option[ActorRef] = None,
+                          health: Float = 0f,
+                          updatedOn: LocalDateTime = LocalDateTime.now,
+                          lastOperational: Option[LocalDateTime] = None) {
+  override def toString() =
+    s"Component $key is $state at ${if (actor.isDefined) actor.get.path.toStringWithoutAddress else "_"} health:$health, lastUpdate: $updatedOn"
 }
 
 
@@ -50,7 +54,8 @@ case class SystemState(components: Map[String, ComponentState]) {
    * Update terminated component state
    */
   def terminated(actorRef: ActorRef): SystemState =
-    components.values.filter(_.actor.isDefined).find(_ == actorRef).map(_.copy(state = ShutDown, updatedOn = LocalDateTime.now)) match {
+    components.values.filter(_.actor.isDefined)
+      .find(_ == actorRef).map(_.copy(state = ShutDown, updatedOn = LocalDateTime.now)) match {
       case Some(state: ComponentState) => update(state)
       case _ => this
     }
@@ -58,7 +63,8 @@ case class SystemState(components: Map[String, ComponentState]) {
   def update(current: ComponentState): SystemState =
     components.get(current.key) match {
       case Some(previous) =>
-        val updated = current.copy(lastOperational = if (current.state != Operational) previous.lastOperational else current.lastOperational)
+        val updated = current.copy(lastOperational =
+          if (current.state != Operational) previous.lastOperational else current.lastOperational)
         copy(components + (current.key -> updated))
       case None => copy(components + (current.key -> current))
     }
@@ -105,11 +111,11 @@ object Coordinator {
 
   /**
    * @param numberOfOrdersPerSecond How many records will be send in one second
-   * @param shelfLifeMultiplier To modify the shelf life on Orders read from file. Value range: (0,1]
-   * @param limit How many records to be sent to Order Processor, by default all will be sent
-   * @param resetDB Whether or not to reset the OrderMonitor's persistent database which tracks order lifecycle.
+   * @param shelfLifeMultiplier     To modify the shelf life on Orders read from file. Value range: (0,1]
+   * @param limit                   How many records to be sent to Order Processor, by default all will be sent
+   * @param resetDB                 Whether or not to reset the OrderMonitor's persistent database which tracks order lifecycle.
    */
-  case class RunSimulation(numberOfOrdersPerSecond: Int = 2, shelfLifeMultiplier: Float = 1, limit:Int=Int.MaxValue, resetDB: Boolean = false)
+  case class RunSimulation(numberOfOrdersPerSecond: Int = 2, shelfLifeMultiplier: Float = 1, limit: Int = Int.MaxValue, resetDB: Boolean = false)
 
   case object Initialize
 
@@ -192,14 +198,10 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
     case RunSimulation(ordersPerSecond, shelfLifeMultiplier, limit, resetDB) =>
       runSimulation(state, shelfLifeMultiplier, ordersPerSecond, limit, resetDB)
 
-    case componentState: ComponentState => evaluateState(state.update(componentState))
+    case componentState: ComponentState =>
       val updatedState = evaluateState(state.update(componentState))
       log.debug(s"Received update: $componentState")
       context.become(openForService(updatedState, updateSchedule(heartBeatSchedule, componentState)))
-
-    case CourierAvailability(availability, _) =>
-//      if (availability == 0)
-//        sender() ! RecruitCouriers(dispatcherConf.NumberOfCouriersToRecruitInBatches, state.shelfManagerOption.get, state.orderMonitorOption.get)
 
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
@@ -207,9 +209,8 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
   import system.dispatcher
 
   def evaluateState(systemState: SystemState): SystemState = {
-    //    systemState.components.values.filter(_.state == foreach{
-    //      case componentState => componentState
-    //    }
+    val report = systemState.components.filter(_._2.state != Operational).map(comp => s"${comp._1} is ${comp._2.state}")
+    if (report.nonEmpty) log.debug(s"System state not healthy:[${report.mkString("! ")}]")
     systemState
   }
 
@@ -221,7 +222,7 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
    * Reset DB if requested
    * Tell Customer to send orders from file controlling throttle and shelf life multiplier.
    * * */
-  def runSimulation(state: SystemState, shelfLifeMultiplier: Float, numberOfOrdersPerSecond: Int, limit:Int, resetDB: Boolean): Unit = {
+  def runSimulation(state: SystemState, shelfLifeMultiplier: Float, numberOfOrdersPerSecond: Int, limit: Int, resetDB: Boolean): Unit = {
     (state.customerOption, state.orderMonitorOption) match {
       case (Some(customer), Some(orderMonitor)) =>
         orderMonitor.tell(RequestOrderLifeCycle(), customer)
@@ -261,7 +262,8 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
     }
   }
 
-  private def createHeartBeatSchedule(systemState: SystemState): Map[String, Cancellable] = systemState.activeActors.map(createHeartBeatSchedule).toMap
+  private def createHeartBeatSchedule(systemState: SystemState): Map[String, Cancellable] =
+    systemState.activeActors.map(createHeartBeatSchedule).toMap
 
   private def createHeartBeatSchedule(actorRef: ActorRef): (String, Cancellable) =
     actorRef.path.toStringWithoutAddress -> context.system.scheduler.scheduleOnce(coordinatorConf.HeartBeatScheduleMillis) {
@@ -273,7 +275,8 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
     schedule + createHeartBeatSchedule(heartBeat.actor.get)
   }
 
-  def broadcastRouter(systemState: SystemState): Router = Router(BroadcastRoutingLogic(), systemState.activeActors.map(ActorRefRoutee(_)).toIndexedSeq)
+  def broadcastRouter(systemState: SystemState): Router =
+    Router(BroadcastRoutingLogic(), systemState.activeActors.map(ActorRefRoutee(_)).toIndexedSeq)
 
 }
 

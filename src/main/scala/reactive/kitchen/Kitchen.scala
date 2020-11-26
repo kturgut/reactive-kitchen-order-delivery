@@ -76,7 +76,7 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
       (state.dispatcherOption, state.orderMonitorOption) match {
         case (Some(dispatcher), Some(orderMonitor)) =>
           log.debug(s"Initializing Kitchen ${self.path.toStringWithoutAddress} with ${dispatcher} and ${orderMonitor}")
-          val shelfManager = context.actorOf(ShelfManager.props(self, orderMonitor), ShelfManagerActor)
+          val shelfManager = context.actorOf(ShelfManager.props(self, orderMonitor, dispatcher), ShelfManagerActor)
           context.watch(shelfManager)
           dispatcher.tell(state.update(ComponentState(ShelfManagerActor, Operational, Some(shelfManager))), sender())
           dispatcher ! RecruitCouriers(dispatcherConf.NumberOfCouriersToRecruitInBatches, shelfManager, orderMonitor)
