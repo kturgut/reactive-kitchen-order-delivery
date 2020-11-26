@@ -56,8 +56,6 @@ class PackagedProductTestSpec extends BaseSpec {
       val actual2 = for (secondsIntoFuture <- (-1) until 5) yield invalidProduct.phantomCopy(1, time.plusSeconds(secondsIntoFuture)).value
       assert(actual2 == expected)
     }
-
-
   }
   val expected = List((10f, 1f), (8.5f, 0.85f), (7f, 0.7f), (5.5f, 0.55f), (4f, 0.4f), (2.5f, 0.25f), (1f, 0.1f), (0f, 0f), (0f, 0f), (0f, 0f))
 

@@ -3,7 +3,7 @@ package reactive.coordinator
 import java.time.LocalDateTime
 
 import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, OneForOneStrategy, PoisonPill, Props, Stash, Terminated, Timers}
+import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, DeadLetter, OneForOneStrategy, PoisonPill, Props, Stash, Terminated, Timers, UnhandledMessage}
 import akka.routing.{ActorRefRoutee, BroadcastRoutingLogic, Router}
 import reactive._
 import reactive.config.Configs
@@ -11,6 +11,7 @@ import reactive.coordinator.ComponentState.{Operational, State}
 import reactive.customer.Customer
 import reactive.customer.Customer.SimulateOrdersFromFile
 import reactive.delivery.Dispatcher
+import reactive.delivery.Dispatcher.CourierAvailability
 import reactive.kitchen.Kitchen
 import reactive.order.OrderMonitor.{RequestOrderLifeCycle, ResetDatabase}
 import reactive.order.{OrderMonitor, OrderProcessor}
@@ -134,6 +135,9 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
 
   import Coordinator._
 
+  system.eventStream.subscribe(self, classOf[UnhandledMessage])
+  system.eventStream.subscribe(self, classOf[DeadLetter])
+
   /**
    * Default supervision strategy on component failure is Restart
    * This can be customized for specific exceptions
@@ -202,6 +206,15 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
       val updatedState = evaluateState(state.update(componentState))
       log.debug(s"Received update: $componentState")
       context.become(openForService(updatedState, updateSchedule(heartBeatSchedule, componentState)))
+
+    case CourierAvailability(active,_) =>
+//      broadcastRouter(state).route(ReportStatus,self)
+//      if (active<3) reportState(state)
+
+    case unhandled: UnhandledMessage =>
+      log.debug(s"Unhandled message: ${unhandled}")
+    case dead: DeadLetter =>
+      log.debug(s"Message to dead: ${dead}")
 
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }

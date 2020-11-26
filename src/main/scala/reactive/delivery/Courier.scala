@@ -115,7 +115,6 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
       becomeAvailable(scheduledAction)
 
     case DeliverNow =>
-log.error("SENDING PICKUP REQUEST")
       val future = shelfManager ? PickupRequest(assignment)
       val action = scheduledAction // !!? Do not use scheduleAction directly as future may be executed on different thread
       future.onComplete {

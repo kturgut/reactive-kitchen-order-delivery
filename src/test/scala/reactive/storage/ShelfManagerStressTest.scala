@@ -5,84 +5,14 @@ import java.time.temporal.ChronoUnit
 
 import akka.event.NoLogging
 import akka.testkit.TestProbe
-import com.typesafe.config.ConfigFactory
 import reactive.BaseSpec
-import reactive.config.ShelfConfig
 import reactive.order.Temperature
-import reactive.storage.PackagedProduct.dateFormatter
 import reactive.storage.ShelfManager.DiscardOrder
 
 import scala.collection.mutable
 
-class StorageSpec extends BaseSpec with StorageHelper {
+class ShelfManagerStressTest  extends BaseSpec with StorageHelper {
 
-
-  "A Shelve" should {
-
-    val customer = TestProbe(CustomerName)
-    val time = LocalDateTime.now()
-
-    val product1 = samplePackagedProduct(1, customer.ref, 1000, 0.5f, Cold, time)
-    val product2 = samplePackagedProduct(2, customer.ref, 2000, 0.5f, Cold, time)
-    val product3 = samplePackagedProduct(3, customer.ref, 3000, 0.5f, Cold, time)
-    val product4 = samplePackagedProduct(4, customer.ref, 3000, 0.5f, Cold, time)
-
-    "store a single product and give it back if asked before it expires" in {
-      val shelf = Shelf.cold(3)
-      assert(shelf.size == 0)
-      shelf += product1
-      assert(shelf.size == 1)
-      shelf += product1
-      assert(shelf.size == 1)
-      shelf -= product1
-      assert(shelf.size == 0)
-    }
-
-    "store multiple products and preserve priority order" in {
-      val shelf = Shelf.cold(3)
-      assert(shelf.size == 0)
-      assert(shelf.hasAvailableSpace && !shelf.overCapacity)
-
-      shelf += product2
-      assert(shelf.size == 1)
-      assert(shelf.highestValueProduct == product2 && shelf.lowestValueProduct == product2)
-
-      shelf += product1
-      assert(shelf.size == 2)
-      assert(shelf.highestValueProduct == product2 && shelf.lowestValueProduct == product1)
-      assert(shelf.hasAvailableSpace && !shelf.overCapacity)
-
-      shelf += product3
-      assert(shelf.size == 3)
-      assert(shelf.highestValueProduct == product3 && shelf.lowestValueProduct == product1)
-      assert(!shelf.hasAvailableSpace && !shelf.overCapacity)
-
-      shelf += product4
-      assert(shelf.size == 4)
-      assert(shelf.highestValueProduct == product4 && shelf.lowestValueProduct == product1)
-      assert(!shelf.hasAvailableSpace && shelf.overCapacity)
-
-      shelf -= product2
-      shelf -= product4
-      assert(shelf.size == 2)
-      assert(shelf.highestValueProduct == product3 && shelf.lowestValueProduct == product1)
-    }
-
-    "support finding a packaged product by order" in {
-      val shelf = Shelf.cold(3)
-      assert(!shelf.getPackageForOrder(product1.order).isDefined)
-      shelf += product1
-      var response = shelf.getPackageForOrder(product1.order)
-      assert(response.isDefined && response.get.order == product1.order)
-      shelf += product2
-      response = shelf.getPackageForOrder(product1.order)
-      assert(response.isDefined && response.get.order == product1.order)
-      shelf += product3
-      shelf += product4
-      response = shelf.getPackageForOrder(product4.order)
-      assert(response.isDefined && response.get.order == product4.order)
-    }
-  }
 
   "A Storage" should {
 
@@ -207,44 +137,5 @@ class StorageSpec extends BaseSpec with StorageHelper {
 
 
 
-  }
-}
-
-trait StorageHelper {
-
-  def collectStorageData(storage: Storage): Map[Temperature, List[(String, Float, Float)]] =
-    storage.shelves.map(shelf => shelf._1 -> collectShelfData(shelf._2)).toMap
-
-  def collectShelfData(shelf: Shelf): List[(String, Float, Float)] =
-    shelf.products.map(p => (p.order.id, p.remainingShelfLife, p.value)).toList
-
-  def report(storage: Storage, verbose: Boolean = false): Unit = {
-    def print(shelf: Shelf): Unit = {
-      println(s"${shelf.name} shelf capacity utilization:${shelf.products.size} / ${shelf.capacity}, decay rate modifier:${shelf.decayModifier} createdOn: ${storage.createdOn.format(dateFormatter)}")
-      if (verbose)
-        println(s"       contents: ${shelf.products.map(product => (product.order.id, product.order.shelfLife, product.order.name, product.value, product.createdOn.format(dateFormatter))).mkString(",")}")
-      else
-        println(s"       contents: ${shelf.products.map(product => (product.order.id, product.remainingShelfLife, product.value)).mkString(",")}")
-    }
-
-    println
-    storage.shelves.values.foreach(print)
-  }
-
-  def shelfConfig = {
-    val configString =
-    """
-      |      hot-shelf-capacity = 10
-      |      cold-shelf-capacity = 10
-      |      frozen-shelf-capacity = 10
-      |      overflow-shelf-capacity = 15
-      |
-      |      hot-shelf-decay-modifier = 1
-      |      cold-shelf-decay-modifier = 1
-      |      frozen-shelf-decay-modifier = 1
-      |      overflow-shelf-decay-modifier = 2
-      |""".stripMargin
-    val config = ConfigFactory.parseString(configString)
-    ShelfConfig(config)
   }
 }

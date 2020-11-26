@@ -40,7 +40,7 @@ trait TestSpecHelper {
   val RoundingErrorThreshold = 0.002f
 
   def samplePackagedProduct(id:Int, customer:ActorRef, shelfLife:Int = 100, decayRate:Float=0.5f, temp:String = Hot, time:LocalDateTime=LocalDateTime.now()):PackagedProduct =
-    PackagedProduct(Order(id.toString, "Ayran", temp, shelfLife, decayRate, customer), (2000,6000), time)
+    PackagedProduct(Order(id.toString, "Ayran", temp, shelfLife, decayRate, customer, time), (2000,6000), time)
 
 
   def samplePackagedProductAndAssignment(id:Int, customer:ActorRef, courier:ActorRef):(PackagedProduct,CourierAssignment) = {
@@ -59,6 +59,11 @@ trait TestSpecHelper {
       (a zip b forall { ab => math.abs(ab._1._1 - ab._2._1) < RoundingErrorThreshold && math.abs(ab._1._2 - ab._2._2) < RoundingErrorThreshold
       })
   }
+//  def assertEquals(a: List[(Float, Float)], b: List[(Float, Float)]): Boolean = {
+//    a.size == b.size &&
+//      (a zip b forall { ab => math.abs(ab._1._1 - ab._2._1) < RoundingErrorThreshold && math.abs(ab._1._2 - ab._2._2) < RoundingErrorThreshold
+//      })
+//  }
 
   val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
   val fixedTime = LocalDateTime.parse("1970-03-09 06:00",formatter)

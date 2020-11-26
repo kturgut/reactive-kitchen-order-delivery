@@ -78,10 +78,6 @@ class StorageShelfLifeOptimizationSpec extends BaseSpec with StorageHelper {
       assert(discarded.leftSide.head.order == hots(7).order)
     }
 
-    "if new product added when full, any product that is guaranteed to miss its delivery window before expiration should be discarded first" in {
-      // TODO
-    }
-
 
     def print(shelf: Shelf): Unit = {
       println(s"${shelf.name} shelf capacity utilization:${shelf.products.size} / ${shelf.capacity}, decay rate modifier:${shelf.decayModifier}")

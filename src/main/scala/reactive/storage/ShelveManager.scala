@@ -41,13 +41,14 @@ import scala.concurrent.duration.DurationInt
  */
 object ShelfManager {
 
-  val ExpiredShelfLife = "ExpiredShelfLife"
-  val ShelfCapacityExceeded = "ShelfCapacityExceeded"
+  sealed trait DiscardReason
+  case object ExpiredShelfLife extends DiscardReason
+  case object ShelfCapacityExceeded extends DiscardReason
 
   def props(kitchenRef: ActorRef, orderMonitorRef: ActorRef, dispatcher:ActorRef) =
     Props(new ShelfManager(kitchenRef, orderMonitorRef,dispatcher))
 
-  case class DiscardOrder(order: Order, reason: String, createdOn: LocalDateTime) extends JacksonSerializable
+  case class DiscardOrder(order: Order, reason: DiscardReason, createdOn: LocalDateTime) extends JacksonSerializable
 
   case object TimerKey
 
@@ -59,6 +60,9 @@ object ShelfManager {
 
   case object RequestCapacityUtilization
 
+  /**
+   *  Capacity Utilization is a number between [0,1]. 1 representing shelf is full at capacity
+   */
   case class CapacityUtilization(overflow: Float, allShelves: Float)
 
 }
