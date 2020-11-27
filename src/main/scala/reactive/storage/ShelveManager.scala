@@ -41,14 +41,13 @@ import scala.concurrent.duration.DurationInt
  */
 object ShelfManager {
 
-  sealed trait DiscardReason
-  case object ExpiredShelfLife extends DiscardReason
-  case object ShelfCapacityExceeded extends DiscardReason
+  val ExpiredShelfLife = "ExpiredShelfLife"
+  val ShelfCapacityExceeded ="ShelfCapacityExceeded"
 
   def props(kitchenRef: ActorRef, orderMonitorRef: ActorRef, dispatcher:ActorRef) =
     Props(new ShelfManager(kitchenRef, orderMonitorRef,dispatcher))
 
-  case class DiscardOrder(order: Order, reason: DiscardReason, createdOn: LocalDateTime) extends JacksonSerializable
+  case class DiscardOrder(order: Order, reason: String, createdOn: LocalDateTime) extends JacksonSerializable
 
   case object TimerKey
 
@@ -79,12 +78,7 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorR
 
   def readyForService(courierAssignments: ListMap[Order, CourierAssignment], storage: Storage): Receive = {
 
-    case _: SystemState  =>
-      log.debug(s"Shelf Manager responding to SYSTEMSTATE with Copmonent state to $sender")
-      sender ! ComponentState(ShelfManagerActor, Operational, Some(self), 1f - storage.shelves(Temperature.All).products.size / storage.shelves(Temperature.All).capacity)
-
-    case ReportStatus =>
-log.debug(s"Shelf Manager reporting state to $sender")
+    case _: SystemState | ReportStatus =>
       sender ! ComponentState(ShelfManagerActor, Operational, Some(self), 1f - storage.shelves(Temperature.All).products.size / storage.shelves(Temperature.All).capacity)
 
     case StartAutomaticShelfLifeOptimization =>

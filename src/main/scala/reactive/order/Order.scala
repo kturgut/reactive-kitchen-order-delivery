@@ -98,7 +98,7 @@ case class OrderLifeCycle(order: Order,
     if (delivery.isDefined) {
       log.warning(s"Delivery already happened for order ${order.id}")
     }
-    if (discard.isDefined) {
+    if (discard.isDefined && delivery.isDefined) {
       log.error(s"This order ${order.id} is already delivered on ${delivery.get.createdOn}, Ignoring discard notice");
       this
     }
@@ -119,7 +119,8 @@ case class OrderLifeCycle(order: Order,
   def toShortString(): String = {
     val dateFormatter = PackagedProduct.dateFormatter
     s"Order id:${order.id} '${order.name}' shelfLife:${order.shelfLife} ${((delivery, discard, product) match {
-      case (Some(delivery), None, _) => s"delivered value:${delivery.product.value} tips:${delivery.acceptance.tips} on:${delivery.createdOn.format(dateFormatter)}"
+      case (Some(delivery), None, _) => s"delivered value:${delivery.product.value} " +
+        s"tips:${delivery.acceptance.tips} on:${delivery.createdOn.format(dateFormatter)}"
       case (None, Some(discardOrder), _) => s"discarded:${discardOrder.reason} on:${discardOrder.createdOn.format(dateFormatter)}"
       case (None,None, Some(packagedProduct)) => s"produced on:${packagedProduct.createdOn.format(dateFormatter)}"
       case _=> s"received on:${order.createdOn.format(dateFormatter)}"
@@ -127,9 +128,11 @@ case class OrderLifeCycle(order: Order,
   }
   override def toString(): String = {
     val dateFormatter = PackagedProduct.dateFormatter
-    val buffer = new StringBuffer(s"Order id:${order.id} '${order.name}' shelfLife:${order.shelfLife} received on:${order.createdOn.format(dateFormatter)}")
+    val buffer = new StringBuffer(s"Order id:${order.id} '${order.name}' " +
+      s"shelfLife:${order.shelfLife} received on:${order.createdOn.format(dateFormatter)}")
     if (this.product.isDefined) buffer.append(s" produced on:${product.get.createdOn.format(dateFormatter)}")
-    if (this.delivery.isDefined) buffer.append(s" delivered value:${delivery.get.product.value} tips:${delivery.get.acceptance.tips} on:${delivery.get.createdOn.format(dateFormatter)}")
+    if (this.delivery.isDefined) buffer.append(s" delivered value:${delivery.get.product.value} " +
+      s"tips:${delivery.get.acceptance.tips} on:${delivery.get.createdOn.format(dateFormatter)}")
     if (this.discard.isDefined) buffer.append(s" discarded:${discard.get.reason} on:${discard.get.createdOn.format(dateFormatter)}")
     buffer.toString
   }

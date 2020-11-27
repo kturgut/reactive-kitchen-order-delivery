@@ -66,7 +66,8 @@ object Courier {
 
   case class DeclineCourierAssignment(courierRef: ActorRef, product: PackagedProduct, originalSender: ActorRef) extends JacksonSerializable
 
-  case class DeliveryComplete(assignment: CourierAssignment, product: PackagedProduct, acceptance: DeliveryAcceptance, createdOn: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
+  case class DeliveryComplete(assignment: CourierAssignment, product: PackagedProduct,
+                              acceptance: DeliveryAcceptance, createdOn: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
     def prettyString(): String = s"DeliveryComplete of product '${assignment.order.name} in " + f"$durationOrderToDeliveryInSeconds%1.2f" +
       s" seconds. Value delivered:${product.value}. Tip received:${acceptance.tips}. Order id:${assignment.order.id}"
 

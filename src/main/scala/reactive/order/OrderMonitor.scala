@@ -166,12 +166,16 @@ case object OrderMonitor {
       log.info(s"  Total orders delivered:$deliveryCounter.")
       log.info(s"  Total orders discarded:$discardedOrderCounter.")
       if (verbose) {
-        log.info(s"Incomplete order summary from order-life-cycle cache:")
+        log.info(s"\nINCOMPLETE order summary from order-life-cycle cache:")
         activeOrders.values.filterNot(life=>life.completed).foreach {
           life=> log info life.toShortString
         }
-        log.info(s"Completed order summary from order-life-cycle cache:")
-        activeOrders.values.filter(life=>life.completed).foreach {
+        log.info(s"\nDISCARDED order summary from order-life-cycle cache:")
+        activeOrders.values.filter(life=>life.discarded).foreach {
+          life=> log info life.toString
+        }
+        log.info(s"\nDELIVERED order summary from order-life-cycle cache:")
+        activeOrders.values.filter(life=>life.delivered).foreach {
           life=> log info life.toString
         }
         log.info("!!!For orders not in cache you can do persistent query!!!")

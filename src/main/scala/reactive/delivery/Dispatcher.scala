@@ -2,7 +2,8 @@ package reactive.delivery
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Stash, Terminated}
 import akka.routing.{ActorRefRoutee, BroadcastRoutingLogic, RoundRobinRoutingLogic, Routee, Router}
-import reactive.DispatcherActor
+import akka.serialization.jackson.JacksonObjectMapperProviderSetup
+import reactive.{DispatcherActor, JacksonSerializable}
 import reactive.config.DispatcherConfig
 import reactive.coordinator.ComponentState.{Initializing, Operational, State, UnhealthyButOperational}
 import reactive.coordinator.Coordinator.ReportStatus
@@ -39,12 +40,13 @@ import reactive.storage.PackagedProduct
 
 object Dispatcher {
 
-  case class RecruitCouriers(numberOfCouriers: Int, shelfManager: ActorRef, orderMonitor: ActorRef)
+  case class RecruitCouriers(numberOfCouriers: Int, shelfManager: ActorRef, orderMonitor: ActorRef) extends JacksonSerializable
 
-  case class CourierAvailability(available: Int, total: Int) {
+  case class CourierAvailability(available: Int, total: Int) extends JacksonSerializable {
     def health:Float = available.toFloat / total
     def state(config:DispatcherConfig): State = if (health < config.MinimumAvailableToRecruitedCouriersRatio) UnhealthyButOperational else Operational
   }
+  case class DeclineCourierRequest(product:PackagedProduct, availability:CourierAvailability) extends JacksonSerializable
   case object ReportAvailability
 }
 
@@ -117,7 +119,7 @@ class Dispatcher extends Actor with Stash with ActorLogging {
       }
       else {
         log.warning(s"Dispatcher does not have available routers. Declining delivery order. $availability")
-        sender()! availability
+        sender() ! DeclineCourierRequest(product,availability)
       }
 
 

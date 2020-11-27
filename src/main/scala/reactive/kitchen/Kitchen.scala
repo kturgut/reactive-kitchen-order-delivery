@@ -5,7 +5,8 @@ import reactive.config.Configs
 import reactive.coordinator.ComponentState.{Operational, UnhealthyButOperational}
 import reactive.coordinator.Coordinator.ReportStatus
 import reactive.coordinator.{ComponentState, SystemState}
-import reactive.delivery.Dispatcher.{CourierAvailability, RecruitCouriers}
+import reactive.delivery.Courier.CourierAssignment
+import reactive.delivery.Dispatcher.{CourierAvailability, DeclineCourierRequest, RecruitCouriers}
 import reactive.order.Order
 import reactive.storage.ShelfManager.{CapacityUtilization, DiscardOrder, ShelfCapacityExceeded}
 import reactive.storage.{PackagedProduct, ShelfManager}
@@ -101,6 +102,13 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
         becomeSuspended(reminderToResume(kitchenConf.SuspensionTimer), shelfManager, orderMonitor, courierDispatcher)
       }
 
+    case assignment:CourierAssignment =>
+      shelfManager ! assignment
+
+    case DeclineCourierRequest(product,availability) =>
+      self ! availability
+      // self ! product.order
+
     case DiscardOrder(_,reason,_) =>
       if (reason == ShelfCapacityExceeded) {
         becomeSuspended(reminderToResume(kitchenConf.SuspensionTimer), shelfManager, orderMonitor, courierDispatcher)
@@ -116,7 +124,7 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
       log.info(s"Shelf Manager ${ref.path} is terminated")
       context.become(closedForService)
 
-    case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
+    case other => log.error(s"Received unrecognized message $other while open from sender: ${sender()}")
   }
 
 
@@ -140,6 +148,10 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
         becomeSuspended(reminderToResume(kitchenConf.SuspensionTimer), shelfManager, orderMonitor, courierDispatcher)
       }
 
+    case DeclineCourierRequest(product,availability) =>
+      self ! availability
+      // self ! product.order
+
     case AttemptToResumeTakingOrders =>
       (shelfManager ? ShelfManager.RequestCapacityUtilization).onComplete {
         case Success(shelfCapacity: CapacityUtilization) =>
@@ -152,7 +164,7 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
       schedule.cancel()
       checkShelfCapacity(shelfCapacity, shelfManager, orderMonitor, courierDispatcher)
 
-    case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
+    case other => log.error(s"Received unrecognized message $other while suspended from sender: ${sender()}")
   }
 
   var suspensionCounter = 0
