@@ -3,7 +3,7 @@ package reactive.order
 import java.time.LocalDateTime
 
 import akka.actor.{ActorLogging, ActorRef, Cancellable}
-import akka.event.LoggingAdapter
+import akka.event.{LoggingAdapter, NoLogging}
 import akka.persistence.{DeleteMessagesFailure, DeleteMessagesSuccess, PersistentActor, RecoveryCompleted, SaveSnapshotFailure, SaveSnapshotSuccess, SnapshotOffer, SnapshotSelectionCriteria}
 import reactive.config.OrderMonitorConfig
 import reactive.coordinator.ComponentState.Operational
@@ -98,7 +98,7 @@ case object OrderMonitor {
                                  eventCounter:Int=0,
                                  activeOrders:ListMap[String, OrderLifeCycle] = ListMap.empty) extends JacksonSerializable {
 
-    def update(event:Event, maxCacheSize:Int, log:LoggingAdapter):OrderLifeCycleState = {
+    def update(event:Event, maxCacheSize:Int, log:LoggingAdapter=NoLogging):OrderLifeCycleState = {
       event match {
         case OrderRecord(_,order) =>
           copy(orderCounter=orderCounter+1,
@@ -128,32 +128,57 @@ case object OrderMonitor {
       }
     }
 
-    def updateCache(order: Order,
+    /**
+     * Create or update OrderLifeCycle entry in cache. Maintain cache size under max limit
+     */
+    private def updateCache(order: Order,
                     update: (OrderLifeCycle) => OrderLifeCycle,
                     create: () => OrderLifeCycle,
                     maxCacheSize:Int
                    ): ListMap[String, OrderLifeCycle] = {
-      (activeOrders.get(order.id) match {
+      fifo(activeOrders.get(order.id) match {
         case Some(lifeCycle) =>
-          val updatedEntry = update(lifeCycle)
-          if (updatedEntry.isComplete) activeOrders else activeOrders + (order.id -> updatedEntry)
+          activeOrders + (order.id -> update(lifeCycle))
         case None => activeOrders + (order.id -> create())
-      }).take(maxCacheSize)
+      },maxCacheSize)
     }
 
-    def report(log:LoggingAdapter, message: String) = {
+    /**
+     * First removes the completed orders and then others to maintain cache size
+     */
+    def fifo(in:ListMap[String, OrderLifeCycle],maxCacheSize:Int):ListMap[String, OrderLifeCycle] = {
+      if (in.size>maxCacheSize) {
+        val diff = in.size - maxCacheSize
+        val toRemove = in.map(_._2).filter(_.completed).toList.reverse.take(diff).map(_.order.id)
+        println("REMOVING THESE COMPLETED ORDERS: " + toRemove.mkString(","))
+        in.filter(kv=> !toRemove.contains(kv._1)).take(maxCacheSize)
+      }
+      else in
+    }
+
+    def report(log:LoggingAdapter, message: String, verbose:Boolean = false) = {
       log.info(s"OrderLifeCycleMonitor $message:")
       log.info(s"  Total orders received:$orderCounter.")
       log.info(s"  Total tips received:$totalTipsReceived.")
-      log.info(s"  Total active orders:${activeOrders.size}")
+      log.info(s"  Total active orders in cache:${activeOrders.size}")
       log.info(s"  Active orders pending production: ${activeOrders.values.count(!_.produced)}.")
-      log.info(s"  Active Orders pending delivery: ${activeOrders.values.count(_.isComplete)}.")
+      log.info(s"  Active Orders pending delivery: ${activeOrders.values.count(!_.completed)}.")
       log.info(s"  Total orders delivered:$deliveryCounter.")
       log.info(s"  Total orders discarded:$discardedOrderCounter.")
+      if (verbose) {
+        log.info(s"Incomplete order summary from order-life-cycle cache:")
+        activeOrders.values.filterNot(life=>life.completed).foreach {
+          life=> log info life.toShortString
+        }
+        log.info(s"Completed order summary from order-life-cycle cache:")
+        activeOrders.values.filter(life=>life.completed).foreach {
+          life=> log info life.toString
+        }
+        log.info("!!!For orders not in cache you can do persistent query!!!")
+      }
     }
 
   }
-
 }
 
 
@@ -191,12 +216,13 @@ class OrderMonitor extends PersistentActor with ActorLogging {
     case discard: DiscardOrder =>
       val event = DiscardOrderRecord(LocalDateTime.now(), discard)
       persist(event) { event =>
-        log.debug(s"Order update: discarded: ${event.discard.order.name} for ${event.discard.reason} id ${event.discard.order.id}. Total discarded:${state.discardedOrderCounter}")
+        log.debug(s"Order update: discarded: ${event.discard.order.name} " +
+          s"for ${event.discard.reason} id ${event.discard.order.id}. Total discarded:${state.discardedOrderCounter}")
         updateState(event)
       }
 
     case delivery: DeliveryComplete =>
-      val event = DeliveryCompleteRecord(delivery.time, delivery)
+      val event = DeliveryCompleteRecord(delivery.createdOn, delivery)
       persist(event) { event =>
         log.debug(s"Order update: delivered: ${event.delivery.prettyString()}")
         updateState(event)
@@ -265,7 +291,7 @@ class OrderMonitor extends PersistentActor with ActorLogging {
   def createTimeoutWindow(): Cancellable = {
     context.system.scheduler.scheduleOnce(config.InactivityShutdownTimer) {
       log.info(s"No activity in the last ${config.InactivityShutdownTimer.toSeconds} seconds!")
-      state.report(log,"is shutting down")
+      state.report(log,"is shutting down",true)
       schedule.cancel()
       context.parent ! Coordinator.Shutdown
     }

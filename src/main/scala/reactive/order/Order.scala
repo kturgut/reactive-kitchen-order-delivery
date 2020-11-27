@@ -1,6 +1,7 @@
 package reactive.order
 
 import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 import akka.actor.ActorRef
 import akka.event.LoggingAdapter
@@ -50,9 +51,13 @@ sealed trait Temperature {
 case object Temperature {
 
   case object Hot extends Temperature
+
   case object Cold extends Temperature
+
   case object Frozen extends Temperature
+
   case object All extends Temperature
+
   case object UnknownTemperature extends Temperature
 
 }
@@ -71,7 +76,7 @@ case class OrderLifeCycle(order: Order,
                           delivery: Option[DeliveryComplete] = None,
                           discard: Option[DiscardOrder] = None) extends JacksonSerializable {
 
-  def isComplete: Boolean = produced && (delivered || discarded)
+  def completed: Boolean = produced && (delivered || discarded)
 
   def produced: Boolean = product.isDefined
 
@@ -94,7 +99,7 @@ case class OrderLifeCycle(order: Order,
       log.warning(s"Delivery already happened for order ${order.id}")
     }
     if (discard.isDefined) {
-      log.error(s"This order ${order.id} is already delivered on ${delivery.get.time}, Ignoring discard notice");
+      log.error(s"This order ${order.id} is already delivered on ${delivery.get.createdOn}, Ignoring discard notice");
       this
     }
     else this.copy(delivery = Some(deliveryUpdate))
@@ -105,9 +110,28 @@ case class OrderLifeCycle(order: Order,
       log.warning(s"This order already marked as discarded ${order.id}")
     }
     if (delivery.isDefined) {
-      log.error(s"This order ${order.id} has been delivered on ${delivery.get.time}, Ignoring discard notice");
+      log.error(s"This order ${order.id} has been delivered on ${delivery.get.createdOn}, Ignoring discard notice");
       this
     }
     else this.copy(discard = Some(discardUpdate))
   }
+
+  def toShortString(): String = {
+    val dateFormatter = PackagedProduct.dateFormatter
+    s"Order id:${order.id} '${order.name}' shelfLife:${order.shelfLife} ${((delivery, discard, product) match {
+      case (Some(delivery), None, _) => s"delivered value:${delivery.product.value} tips:${delivery.acceptance.tips} on:${delivery.createdOn.format(dateFormatter)}"
+      case (None, Some(discardOrder), _) => s"discarded:${discardOrder.reason} on:${discardOrder.createdOn.format(dateFormatter)}"
+      case (None,None, Some(packagedProduct)) => s"produced on:${packagedProduct.createdOn.format(dateFormatter)}"
+      case _=> s"received on:${order.createdOn.format(dateFormatter)}"
+    })}"
+  }
+  override def toString(): String = {
+    val dateFormatter = PackagedProduct.dateFormatter
+    val buffer = new StringBuffer(s"Order id:${order.id} '${order.name}' shelfLife:${order.shelfLife} received on:${order.createdOn.format(dateFormatter)}")
+    if (this.product.isDefined) buffer.append(s" produced on:${product.get.createdOn.format(dateFormatter)}")
+    if (this.delivery.isDefined) buffer.append(s" delivered value:${delivery.get.product.value} tips:${delivery.get.acceptance.tips} on:${delivery.get.createdOn.format(dateFormatter)}")
+    if (this.discard.isDefined) buffer.append(s" discarded:${discard.get.reason} on:${discard.get.createdOn.format(dateFormatter)}")
+    buffer.toString
+  }
+
 }

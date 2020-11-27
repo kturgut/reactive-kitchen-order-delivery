@@ -92,10 +92,6 @@ class Dispatcher extends Actor with Stash with ActorLogging {
       log.info(s"Courier ${assignment.courierName} is now on assignment. Total available couriers ${router.routees.size}/$lastCourierId")
       becomeActivate(orderMonitor, shelfManager, router.removeRoutee(assignment.courierRef), lastCourierId)
 
-//    case OnAssignment(courierRef) =>
-//      log.info(s"Courier ${courierRef.path} is now on assignment. Total available couriers ${router.routees.size}/$lastCourierId")
-//      becomeActivate(orderMonitor, shelfManager, router.removeRoutee(courierRef), lastCourierId)
-
     case Available(courierRef) =>
       log.info(s"Courier ${courierRef.path} is now available. Total available couriers ${router.routees.size}/$lastCourierId")
       context.become(active(orderMonitor, shelfManager, router.addRoutee(courierRef), lastCourierId))
@@ -117,8 +113,6 @@ class Dispatcher extends Actor with Stash with ActorLogging {
       val availability = CourierAvailability(router.routees.size, lastCourierId)
       if (availability.available > 0) {
         log.debug(s"Dispatcher routing order with id:${product.order.id}. Total available couriers ${availability.available}/$lastCourierId.") // Available: ${available(router)}")
-        val sentBy=sender()
-        println(sentBy)
         router.route(product, sender())
       }
       else {

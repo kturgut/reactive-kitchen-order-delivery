@@ -1,9 +1,11 @@
 package reactive.storage
 
 import java.time.LocalDateTime
+import java.time.temporal.ChronoUnit
 
 import akka.testkit.TestProbe
 import reactive.BaseSpec
+import reactive.order.Order
 
 class PackagedProductTestSpec extends BaseSpec {
 
@@ -11,6 +13,18 @@ class PackagedProductTestSpec extends BaseSpec {
     val orderProcessor = TestProbe(OrderProcessorName)
     val time = LocalDateTime.now()
     var product = samplePackagedProduct(1, orderProcessor.ref, 10, 0.5f)
+
+    "two products of the same order should not be equal" in {
+      val customer = TestProbe(CustomerName)
+      val time1 = fixedTime.plus(1, ChronoUnit.SECONDS)
+      val time2 = fixedTime.plus(2, ChronoUnit.SECONDS)
+      val order = Order("1", "Ayran", "hot", 10, 0.3f, customer.ref, fixedTime)
+      val packagedProduct = PackagedProduct(order, (2000, 6000), time1)
+      val anotherProduct = PackagedProduct(order, (2000, 6000), time1)
+      val agedProduct = packagedProduct.phantomCopy(2, time2)
+      assert(packagedProduct != agedProduct)
+      assert(packagedProduct != anotherProduct)
+    }
 
     "be able to create a copy of itself in future time maintaining original creation time" in {
       val timeInFuture = time.plusSeconds(2)
@@ -27,7 +41,6 @@ class PackagedProductTestSpec extends BaseSpec {
       assert(phantom.remainingShelfLife == product.remainingShelfLife)
       assert(phantom.value == product.value)
     }
-
 
     "value should deprecate over time based on decayRate and shelf decayModifier" in {
       val actual = for (secondsIntoFuture <- 0 until 10)

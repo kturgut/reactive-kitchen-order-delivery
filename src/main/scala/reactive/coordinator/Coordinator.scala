@@ -208,9 +208,8 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
       context.become(openForService(updatedState, updateSchedule(heartBeatSchedule, componentState)))
 
     case CourierAvailability(active,_) =>
-      println
-//      broadcastRouter(state).route(ReportStatus,self)
-//      if (active<3) reportState(state)
+      println // TODO
+
 
     case unhandled: UnhandledMessage =>
       log.debug(s"Unhandled message: ${unhandled}")

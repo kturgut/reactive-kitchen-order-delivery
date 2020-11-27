@@ -2,6 +2,7 @@ package reactive
 
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 
 import akka.actor.{ActorRef, ActorSystem}
 import akka.testkit.{ImplicitSender, TestKit}
@@ -67,6 +68,7 @@ trait TestSpecHelper {
 
   val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
   val fixedTime = LocalDateTime.parse("1970-03-09 06:00",formatter)
+  val later = fixedTime plus(5000, ChronoUnit.MILLIS)
 
 
 }
