@@ -26,9 +26,9 @@ class ShelfManagerConfig(config: Config) extends Extension {
 
   val CriticalTimeThresholdForSwappingInMillis: FiniteDuration = config.getDuration("critical-time-threshold-for-swapping-millis")
 
-  val OverflowUtilizationSafetyThreshold = config.getInt("overflow-utilization-safety-threshold")
+  val OverflowUtilizationSafetyThreshold = config.getDouble("overflow-utilization-safety-threshold").toFloat
 
-  val OverflowUtilizationReportingThreshold = config.getInt("overflow-utilization-reporting-threshold")
+  val OverflowUtilizationReportingThreshold = config.getDouble("overflow-utilization-reporting-threshold").toFloat
 
   val MaximumCourierAssignmentCacheSize = config.getInt("max-courier-assignment-cache-size")
 

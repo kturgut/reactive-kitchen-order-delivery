@@ -172,7 +172,7 @@ class OrderMonitor extends PersistentActor with ActorLogging {
   override def receiveCommand: Receive = {
 
     case _:SystemState | ReportStatus =>
-      sender ! ComponentState(OrderMonitorActor,Operational, Some(self))
+      sender ! ComponentState(OrderMonitorActor,Operational, Some(self), 1)
 
     case order: Order =>
       val event = OrderRecord(LocalDateTime.now(), order)

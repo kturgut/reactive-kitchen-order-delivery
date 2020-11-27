@@ -27,7 +27,7 @@ class CourierSpec extends BaseSpec {
         orderProcessor.ref, shelfManager.ref), dispatcher.ref, CourierName)
       val (product, _) = samplePackagedProductAndAssignment(1, orderProcessor.ref, courier)
       courier ! product
-      dispatcher.expectMsg(OnAssignment(courier))
+      dispatcher.expectMsgType[CourierAssignment]
     }
     "successfully deliver order to customer within delivery window, happy path" in {
       val orderMonitor = TestProbe(OrderMonitorName)

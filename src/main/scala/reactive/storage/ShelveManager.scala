@@ -79,7 +79,12 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorR
 
   def readyForService(courierAssignments: ListMap[Order, CourierAssignment], storage: Storage): Receive = {
 
-    case _: SystemState | ReportStatus =>
+    case _: SystemState  =>
+      log.debug(s"Shelf Manager responding to SYSTEMSTATE with Copmonent state to $sender")
+      sender ! ComponentState(ShelfManagerActor, Operational, Some(self), 1f - storage.shelves(Temperature.All).products.size / storage.shelves(Temperature.All).capacity)
+
+    case ReportStatus =>
+log.debug(s"Shelf Manager reporting state to $sender")
       sender ! ComponentState(ShelfManagerActor, Operational, Some(self), 1f - storage.shelves(Temperature.All).products.size / storage.shelves(Temperature.All).capacity)
 
     case StartAutomaticShelfLifeOptimization =>

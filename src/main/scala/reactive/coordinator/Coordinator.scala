@@ -196,7 +196,7 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
         state.get(name).actor.foreach(componentRef => context.stop(componentRef))
 
     case Terminated(ref) =>
-      log.info(s"Component with ref ${ref.path} is terminated")
+      log.warning(s"Component with ref ${ref.path} is terminated")
       context.become(openForService(state.terminated(ref), heartBeatSchedule - ref.path.toStringWithoutAddress))
 
     case RunSimulation(ordersPerSecond, shelfLifeMultiplier, limit, resetDB) =>
@@ -208,6 +208,7 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
       context.become(openForService(updatedState, updateSchedule(heartBeatSchedule, componentState)))
 
     case CourierAvailability(active,_) =>
+      println
 //      broadcastRouter(state).route(ReportStatus,self)
 //      if (active<3) reportState(state)
 

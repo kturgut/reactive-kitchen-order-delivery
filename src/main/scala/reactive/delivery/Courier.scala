@@ -73,7 +73,7 @@ object Courier {
     def durationOrderToDeliveryInSeconds: Float = Duration.between(product.createdOn, acceptance.time).toMillis.toFloat / 1000
   }
 
-  case class OnAssignment(courier: ActorRef)
+//  case class OnAssignment(courier: ActorRef)
 
   case class Available(courier: ActorRef)
 
@@ -98,10 +98,11 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
     case product: PackagedProduct =>
       val courier = self
       val assignment = CourierAssignment(product.order, name, courier)
-
       log.info(s"$name received order to pickup product: ${product.order.name} id:${product.order.id}")
-      shelfManager ! assignment
-      context.parent ! OnAssignment(self)
+      context.parent ! assignment
+      if (sender()!=context.parent) {
+        sender ! assignment
+      }
       context.become(onDelivery(reminderToDeliver(self), assignment))
 
     case message =>

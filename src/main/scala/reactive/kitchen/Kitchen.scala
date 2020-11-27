@@ -96,8 +96,10 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
       courierDispatcher ! product
       orderMonitor ! product
 
-    case CourierAvailability(_,_) =>
-      becomeSuspended(reminderToResume(kitchenConf.SuspensionTimer), shelfManager, orderMonitor, courierDispatcher)
+    case CourierAvailability(available,_) =>
+      if (available == 0) {
+        becomeSuspended(reminderToResume(kitchenConf.SuspensionTimer), shelfManager, orderMonitor, courierDispatcher)
+      }
 
     case DiscardOrder(_,reason,_) =>
       if (reason == ShelfCapacityExceeded) {

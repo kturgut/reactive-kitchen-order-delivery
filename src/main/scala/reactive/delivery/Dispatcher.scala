@@ -87,9 +87,14 @@ class Dispatcher extends Actor with Stash with ActorLogging {
       context.watch(newCourier)
       becomeActivate(orderMonitor, shelfManager, router.addRoutee(newCourier).removeRoutee(ref), lastCourierId)
 
-    case OnAssignment(courierRef) =>
-      log.info(s"Courier ${courierRef.path} is now on assignment. Total available couriers ${router.routees.size}/$lastCourierId")
-      becomeActivate(orderMonitor, shelfManager, router.removeRoutee(courierRef), lastCourierId)
+
+    case assignment:CourierAssignment =>
+      log.info(s"Courier ${assignment.courierName} is now on assignment. Total available couriers ${router.routees.size}/$lastCourierId")
+      becomeActivate(orderMonitor, shelfManager, router.removeRoutee(assignment.courierRef), lastCourierId)
+
+//    case OnAssignment(courierRef) =>
+//      log.info(s"Courier ${courierRef.path} is now on assignment. Total available couriers ${router.routees.size}/$lastCourierId")
+//      becomeActivate(orderMonitor, shelfManager, router.removeRoutee(courierRef), lastCourierId)
 
     case Available(courierRef) =>
       log.info(s"Courier ${courierRef.path} is now available. Total available couriers ${router.routees.size}/$lastCourierId")
@@ -109,8 +114,18 @@ class Dispatcher extends Actor with Stash with ActorLogging {
       sender() ! CourierAvailability(router.routees.size, lastCourierId)
 
     case product: PackagedProduct =>
-      log.debug(s"Dispatcher routing order with id:${product.order.id}. Total available couriers ${router.routees.size}/$lastCourierId. Available: ${available(router)}")
-      router.route(product, sender())
+      val availability = CourierAvailability(router.routees.size, lastCourierId)
+      if (availability.available > 0) {
+        log.debug(s"Dispatcher routing order with id:${product.order.id}. Total available couriers ${availability.available}/$lastCourierId.") // Available: ${available(router)}")
+        val sentBy=sender()
+        println(sentBy)
+        router.route(product, sender())
+      }
+      else {
+        log.warning(s"Dispatcher does not have available routers. Declining delivery order. $availability")
+        sender()! availability
+      }
+
 
     case recruitOrder: RecruitCouriers =>
       recruitCouriers(recruitOrder, lastCourierId, router)
