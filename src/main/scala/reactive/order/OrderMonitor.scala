@@ -150,7 +150,6 @@ case object OrderMonitor {
       if (in.size>maxCacheSize) {
         val diff = in.size - maxCacheSize
         val toRemove = in.map(_._2).filter(_.completed).toList.reverse.take(diff).map(_.order.id)
-        println("REMOVING THESE COMPLETED ORDERS: " + toRemove.mkString(","))
         in.filter(kv=> !toRemove.contains(kv._1)).take(maxCacheSize)
       }
       else in
@@ -209,7 +208,7 @@ class OrderMonitor extends PersistentActor with ActorLogging {
     case order: Order =>
       val event = OrderRecord(LocalDateTime.now(), order)
       persist(event) { event =>
-        log.info(s"Received ${state.orderCounter}th order on ${event.time}:$order")
+        log.info(s"Received ${state.orderCounter+1}th order on ${event.time}:$order")
         updateState(event)
       }
 
@@ -224,7 +223,7 @@ class OrderMonitor extends PersistentActor with ActorLogging {
       val event = DiscardOrderRecord(LocalDateTime.now(), discard)
       persist(event) { event =>
         log.debug(s"Order update: discarded: ${event.discard.order.name} " +
-          s"for ${event.discard.reason} id:${event.discard.order.id}. Total discarded:${state.discardedOrderCounter}")
+          s"for ${event.discard.reason} id:${event.discard.order.id}. Total discarded:${state.discardedOrderCounter+1}")
         updateState(event)
       }
 

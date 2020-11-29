@@ -3,15 +3,13 @@ package reactive.delivery
 import java.time.{Duration, LocalDateTime}
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props}
-import akka.util.Timeout
 import org.scalatest.time.SpanSugar.convertFloatToGrainOfTime
 import reactive.JacksonSerializable
-import reactive.config.{CourierConfig, DispatcherConfig}
+import reactive.config.CourierConfig
 import reactive.order.Order
 import reactive.storage.PackagedProduct
 import reactive.storage.ShelfManager.DiscardOrder
 
-import scala.concurrent.duration.DurationInt
 import scala.util.{Failure, Success}
 
 /**
@@ -64,7 +62,7 @@ object Courier {
 
   case class DeliveryAcceptance(order: Order, signature: String, tips: Int, time: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable
 
-  case class DeclineCourierAssignment(name:String, courierRef: ActorRef, product: PackagedProduct, originalSender: ActorRef) extends JacksonSerializable
+  case class DeclineCourierAssignment(name: String, courierRef: ActorRef, product: PackagedProduct, originalSender: ActorRef) extends JacksonSerializable
 
   case class DeliveryComplete(assignment: CourierAssignment, product: PackagedProduct,
                               acceptance: DeliveryAcceptance, createdOn: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
@@ -99,7 +97,7 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
       val assignment = CourierAssignment(product.order, name, courier)
       log.info(s"$name received order to pickup product: ${product.order.name} id:${product.order.id}")
       context.parent ! assignment
-      if (sender()!=context.parent) {
+      if (sender() != context.parent) {
         sender ! assignment
       }
       context.become(onDelivery(reminderToDeliver(self), assignment))
@@ -111,7 +109,8 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
   def onDelivery(scheduledAction: Cancellable, assignment: CourierAssignment): Receive = {
 
     case discard: DiscardOrder =>
-      log.info(s"Cancelling trip for delivery for ${assignment.order.name} as product was discarded due to ${discard.reason}")
+      log.info(s"Cancelling trip for delivery for ${assignment.order.name} " +
+        s"as product was discarded due to ${discard.reason} id:${assignment.order.id}")
       becomeAvailable(scheduledAction)
 
     case DeliverNow =>
@@ -129,7 +128,7 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
               log.info(delivery.prettyString)
               orderMonitor ! delivery
               becomeAvailable(action)
-            case Success(message) => log.error(s"Customer did not want to provide signature but sent this response: $message. THIS SHOULD NOT HAPPEN")
+            case Success(message) => log.warning(s"Customer did not want to provide signature but sent this response: $message.")
               becomeAvailable(action)
             case Failure(exception) => log.error(s"Exception received while waiting for customer signature. ${exception.getMessage}")
           }
@@ -140,8 +139,9 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
       }
 
     case product: PackagedProduct =>
-      log.warning(s"Courier $name received pickup order with id:${product.order.id} while already on delivery for order with id:${assignment.order.id}. Declining!")
-      context.parent ! DeclineCourierAssignment(name,self, product, sender())
+      log.warning(s"Courier $name received pickup order with id:${product.order.id} " +
+        s"while already on delivery for order with id:${assignment.order.id}. Declining!")
+      context.parent ! DeclineCourierAssignment(name, self, product, sender())
   }
 
   def reminderToDeliver(courierActorRefToRemind: ActorRef): Cancellable = {
