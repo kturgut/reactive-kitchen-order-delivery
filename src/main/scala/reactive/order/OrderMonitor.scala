@@ -157,29 +157,31 @@ case object OrderMonitor {
     }
 
     private def reportFiltered(list:Iterable[OrderLifeCycle], filter:OrderLifeCycle=>Boolean, prefix:String, log:LoggingAdapter) = {
-      log.info(s"\n     $prefix order summary from order-life-cycle cache:")
+      log.info(s"===     $prefix order summary from order-life-cycle cache:     ===")
       list.filter(filter).foreach{life=>log info life.toShortString}
+      log.info(s"")
     }
 
     def report(log:LoggingAdapter, message: String, verbose:Boolean = false) = {
-      log.info(s"OrderLifeCycleMonitor $message:")
+      log.info(s"======== OrderLifeCycleMonitor $message: -cache size:${activeOrders.keys.size}  ===========")
       log.info(s"  Total orders received:$orderCounter.")
       log.info(s"  Total tips received:$totalTipsReceived.")
       log.info(s"  Total active orders in cache:${activeOrders.size}")
       log.info(s"  Active orders pending production: ${activeOrders.values.count(!_.produced)}.")
       log.info(s"  Active Orders pending delivery: ${activeOrders.values.count(!_.completed)}.")
       log.info(s"  Total orders delivered:$deliveryCounter.")
-      log.info(s"  Total orders discarded:$discardedOrderCounter.")
+      log.info(s"  Total discard order notices:$discardedOrderCounter.")
+      log.info(s"  Total discarded orders in cache:${activeOrders.values.filter(_.discarded).size}.")
       if (verbose) {
-        log.info("\nDetail report for orders in cache below. For orders not in cache you can do persistent query!!!")
-        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>(!o.completed),s"\nIncomplete (possibly lost in system)",log)
+        log.info("========  Detail report for orders in cache below. For orders not in cache you can do persistent query!!! ==========")
+        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>(!o.completed),s"Incomplete (possibly lost in system)",log)
         reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>
-          (o.discarded && o.discard.get.reason == ExpiredShelfLife ),s"\nDiscarded for $ExpiredShelfLife",log)
+          (o.discarded && o.discard.get.reason == ExpiredShelfLife ),s"Discarded for $ExpiredShelfLife",log)
         reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>
-          (o.discarded && o.discard.get.reason == ShelfCapacityExceeded ),s"\nDiscarded for $ShelfCapacityExceeded",log)
+          (o.discarded && o.discard.get.reason == ShelfCapacityExceeded ),s"Discarded for $ShelfCapacityExceeded",log)
         reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>
-          (o.discarded && o.discard.get.reason == CourierNotAvailable ),s"\nDiscarded for $CourierNotAvailable",log)
-        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>(o.delivered),s"\nDelivered",log)
+          (o.discarded && o.discard.get.reason == CourierNotAvailable ),s"Discarded for $CourierNotAvailable",log)
+        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>(o.delivered),s"Delivered",log)
       }
     }
 
@@ -241,11 +243,13 @@ class OrderMonitor extends PersistentActor with ActorLogging {
     case Coordinator.Shutdown =>
       context.stop(self)
 
+    case _:SaveSnapshotSuccess =>
+      log.debug(s"Snapshot taken")
+
     case ResetDatabase =>
       log.warning("!!!Resetting OrderLifeCycle persistent store!!!!")
       this.deleteMessages(Long.MaxValue)
       this.deleteSnapshots(SnapshotSelectionCriteria.Latest)
-
   }
 
   /**

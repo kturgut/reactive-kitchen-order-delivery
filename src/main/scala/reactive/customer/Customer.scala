@@ -6,7 +6,6 @@ import java.time.{Duration, LocalDateTime}
 import akka.actor.{Actor, ActorLogging, ActorRef}
 import akka.stream.alpakka.json.scaladsl.JsonReader
 import akka.stream.scaladsl.{FileIO, Flow, Sink}
-import akka.util.Timeout
 import reactive.config.CustomerConfig
 import reactive.coordinator.ComponentState.Operational
 import reactive.coordinator.Coordinator.ReportStatus
@@ -15,6 +14,7 @@ import reactive.delivery.Courier.{DeliveryAcceptance, DeliveryAcceptanceRequest}
 import reactive.order.OrderMonitor.OrderLifeCycleNotFoundInCache
 import reactive.order.OrderProcessor.OrderReceived
 import reactive.order.{Order, OrderLifeCycle, OrderOnFile}
+import reactive.storage.ShelfManager.DiscardOrder
 import reactive.{CustomerActor, JacksonSerializable}
 import spray.json._
 
@@ -69,6 +69,9 @@ class Customer extends Actor with ActorLogging {
     case lastOrderReceivedByOrderMonitor: OrderLifeCycle =>
       log.debug(s"Customer received info on last order received from OrderMonitor, id:${lastOrderReceivedByOrderMonitor.order.id}")
       lastOrderOption = Some(lastOrderReceivedByOrderMonitor)
+
+    case DiscardOrder(order, reason, _) =>
+      log.info(s"Customer received notice for discarded order (reason:$reason). Customer is not so happy :(")
 
     case OrderLifeCycleNotFoundInCache =>
   }

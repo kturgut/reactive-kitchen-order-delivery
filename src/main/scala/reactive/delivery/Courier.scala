@@ -74,8 +74,6 @@ object Courier {
     def durationOrderToDeliveryInSeconds: Float = Duration.between(product.createdOn, acceptance.time).toMillis.toFloat / 1000
   }
 
-//  case class OnAssignment(courier: ActorRef)
-
   case class Available(courier: ActorRef)
 
   case object DeliverNow
@@ -142,7 +140,7 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
       }
 
     case product: PackagedProduct =>
-      log.warning(s"Courier $name received pickup order with id:${product.order.id} while already on delivery. Declining!")
+      log.warning(s"Courier $name received pickup order with id:${product.order.id} while already on delivery for order with id:${assignment.order.id}. Declining!")
       context.parent ! DeclineCourierAssignment(name,self, product, sender())
   }
 

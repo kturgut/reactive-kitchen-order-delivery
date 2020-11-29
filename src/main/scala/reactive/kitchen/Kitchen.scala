@@ -8,7 +8,7 @@ import reactive.coordinator.{ComponentState, SystemState}
 import reactive.delivery.Courier.CourierAssignment
 import reactive.delivery.Dispatcher.{CourierAvailability, DeclineCourierRequest, RecruitCouriers}
 import reactive.order.Order
-import reactive.storage.ShelfManager.{CapacityUtilization, CourierNotAvailable, DiscardOrder, ShelfCapacityExceeded}
+import reactive.storage.ShelfManager.CapacityUtilization
 import reactive.storage.{PackagedProduct, ShelfManager}
 import reactive.{JacksonSerializable, KitchenActor, ShelfManagerActor}
 
@@ -79,7 +79,7 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
           log.debug(s"Initializing Kitchen ${self.path.toStringWithoutAddress} with ${dispatcher} and ${orderMonitor}")
           val shelfManager = context.actorOf(ShelfManager.props(self, orderMonitor, dispatcher), ShelfManagerActor)
           context.watch(shelfManager)
-          dispatcher.tell(state.update(ComponentState(ShelfManagerActor, Operational, Some(shelfManager))), sender())
+          shelfManager.tell(state.update(ComponentState(ShelfManagerActor, Operational, Some(shelfManager))), sender())
           dispatcher ! RecruitCouriers(dispatcherConf.NumberOfCouriersToRecruitInBatches, shelfManager, orderMonitor)
           becomeActive(shelfManager, orderMonitor, dispatcher)
       }
@@ -97,23 +97,19 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
       courierDispatcher ! product
       orderMonitor ! product
 
-    case CourierAvailability(available,_) =>
+    case CourierAvailability(available, _) =>
+      log.debug(s"Kitchen received courier availability: $available")
       if (available == 0) {
         becomeSuspended(reminderToResume(kitchenConf.SuspensionTimer), shelfManager, orderMonitor, courierDispatcher)
       }
 
-    case assignment:CourierAssignment =>
+    case assignment: CourierAssignment =>
       log.debug(s"Forwarding courier assignment to shelf for ${assignment.order.id} by ${assignment.courierName}")
       shelfManager ! assignment
 
-    case DeclineCourierRequest(product,availability) =>
+    case decline@DeclineCourierRequest(_, availability) =>
+      shelfManager ! decline
       self ! availability
-      orderMonitor ! DiscardOrder(product.order,CourierNotAvailable,product.createdOn)
-
-    case DiscardOrder(_,reason,_) =>
-      if (reason == ShelfCapacityExceeded) {
-        becomeSuspended(reminderToResume(kitchenConf.SuspensionTimer), shelfManager, orderMonitor, courierDispatcher)
-      }
 
     case shelfCapacity: CapacityUtilization =>
       checkShelfCapacity(shelfCapacity, shelfManager, orderMonitor, courierDispatcher)
@@ -143,34 +139,24 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
       log.debug(s"Kitchen stashing message received in suspended state: $order")
       stash()
 
-    case DiscardOrder(_,reason,_) =>
-      if (reason == ShelfCapacityExceeded) {
-        schedule.cancel()
-        becomeSuspended(reminderToResume(kitchenConf.SuspensionTimer), shelfManager, orderMonitor, courierDispatcher)
-      }
-
-    case decline@DeclineCourierRequest(product,availability) =>
-        shelfManager ! decline
-        self ! availability
-
-    //      val discardOrder = DiscardOrder(product.order,CourierNotAvailable,product.createdOn)
-//      shelfManager ! discardOrder
-//      self ! availability
-//      orderMonitor ! discardOrder
+    case decline@DeclineCourierRequest(_, availability) =>
+      shelfManager ! decline
+      self ! availability
 
     case AttemptToResumeTakingOrders =>
       (shelfManager ? ShelfManager.RequestCapacityUtilization).onComplete {
         case Success(shelfCapacity: CapacityUtilization) =>
           schedule.cancel()
           checkShelfCapacity(shelfCapacity, shelfManager, orderMonitor, courierDispatcher)
-        case Failure(exception) => log.error(s"Exception received while waiting for customer signature. ${exception.getMessage}")
+        case Failure(exception) => log.error(s"Exception received while checking available shelf capacity. ${exception.getMessage}")
       }
 
     case shelfCapacity: CapacityUtilization =>
       schedule.cancel()
       checkShelfCapacity(shelfCapacity, shelfManager, orderMonitor, courierDispatcher)
 
-    case CourierAvailability(available,_) =>
+    case CourierAvailability(available, _) =>
+      log.debug(s"Kitchen received courier availability: $available")
       if (available == 0) {
         becomeSuspended(reminderToResume(kitchenConf.SuspensionTimer), shelfManager, orderMonitor, courierDispatcher)
       }
@@ -179,18 +165,18 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
   }
 
   var suspensionCounter = 0
-  private def becomeSuspended(schedule:Cancellable, shelfManager: ActorRef, orderMonitor: ActorRef, dispatcher: ActorRef): Unit = {
-    suspensionCounter +=1
-    log.info(s"KITCHEN BECOMING SUSPENDED: $suspensionCounter")
+
+  private def becomeSuspended(schedule: Cancellable, shelfManager: ActorRef, orderMonitor: ActorRef, dispatcher: ActorRef): Unit = {
+    suspensionCounter += 1
+    log.debug(s"KITCHEN BECOMING SUSPENDED: $suspensionCounter")
     context.parent ! ComponentState(KitchenActor, UnhealthyButOperational, Some(self), 0.5f)
     context.become(suspended(schedule, shelfManager, orderMonitor, dispatcher))
   }
 
   private def becomeActive(shelfManager: ActorRef, orderMonitor: ActorRef, dispatcher: ActorRef): Unit = {
     suspensionCounter = 0
-    log.info("KITCHEN BECOMING ACTIVE")
-    shelfManager.tell(ReportStatus, sender())
-    sender() ! ComponentState(KitchenActor, Operational, Some(self), 1f)
+    log.debug("KITCHEN BECOMING ACTIVE")
+    context.parent ! ComponentState(KitchenActor, Operational, Some(self), 1f)
     context.become(active(shelfManager, orderMonitor, dispatcher))
   }
 

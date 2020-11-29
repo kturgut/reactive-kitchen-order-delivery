@@ -75,12 +75,17 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorR
 
   timers.startSingleTimer(TimerKey, StartAutomaticShelfLifeOptimization, 100 millis)
 
-  override def receive: Receive = readyForService(ListMap.empty, Storage(log,config.shelfConfig(),config.CriticalTimeThresholdForSwappingInMillis.toMillis))
+  override def receive: Receive =
+    readyForService(ListMap.empty, Storage(log,config.shelfConfig(),config.CriticalTimeThresholdForSwappingInMillis.toMillis))
 
   def readyForService(courierAssignments: ListMap[Order, CourierAssignment], storage: Storage): Receive = {
 
     case _: SystemState | ReportStatus =>
-      sender ! ComponentState(ShelfManagerActor, Operational, Some(self), 1f - storage.shelves(Temperature.All).products.size / storage.shelves(Temperature.All).capacity)
+      sender ! ComponentState(ShelfManagerActor, Operational, Some(self),
+        1f - storage.shelves(Temperature.All).products.size / storage.shelves(Temperature.All).capacity)
+
+    case RequestCapacityUtilization =>
+      sender() ! storage.capacityUtilization
 
     case StartAutomaticShelfLifeOptimization =>
       timers.startTimerWithFixedDelay(TimerKey, ManageProductsOnShelves,  config.ShelfLifeOptimizationTimerDelay)
@@ -93,20 +98,24 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorR
       dispatcher.tell(ReportAvailability, kitchen)
       val updatedAssignments = publishDiscardedOrders(storage.optimizeShelfPlacement(), courierAssignments)
       log.debug(s"OVERFLOW PRODUCT SIZE: ${storage.shelves(Temperature.All).products.size}")
-      if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationReportingThreshold)
+      if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationReportingThreshold) {
         storage.reportStatus(true)
-      if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationSafetyThreshold)
+      }
+      if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationSafetyThreshold) {
         kitchen ! storage.capacityUtilization
+      }
       context.become(readyForService(updatedAssignments, storage.snapshot()))
 
     case product: PackagedProduct =>
       log.debug(s"Putting new product ${product.prettyString} on shelf")
-      // TODO handle the case if a packagedProduct for the same order is already on the Shelf. Discard previous one?
+      storage.fetchPackageForOrder(product.order).foreach(product=>
+        log.warning(s"Discarding previously created product for same order with id: ${product.order.id}"))
       val updatedAssignments = publishDiscardedOrders(storage.putPackageOnShelf(product), courierAssignments)
       if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationSafetyThreshold) {
         sender ! storage.capacityUtilization
       }
       self.tell(RequestCapacityUtilization, context.parent)
+      dispatcher.tell(ReportAvailability, kitchen)
       context.become(readyForService(updatedAssignments, storage.snapshot()))
 
     // If product found and not expired return it, else if expired return discard order instead and notify order processor
@@ -129,12 +138,7 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorR
 
     case DeclineCourierRequest(product,_) =>
       storage.fetchPackageForOrder(product.order)
-      orderMonitor ! DiscardOrder(product.order,CourierNotAvailable,product.createdOn)
-      self.tell(RequestCapacityUtilization, context.parent)
-
-
-    case RequestCapacityUtilization =>
-      sender() ! storage.capacityUtilization
+      publishDiscardedOrders(DiscardOrder(product.order,CourierNotAvailable,product.createdOn)::Nil, courierAssignments)
 
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
@@ -147,13 +151,14 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorR
         log.debug(s"Sending discarded order notice $discardedOrder to courier ${assignment.courierRef}")
         assignment.courierRef ! discardedOrder
         log.debug(s"Sending discarded order notice $discardedOrder to orderMonitor ${orderMonitor}")
+        discardedOrder.order.customer ! discardedOrder
         orderMonitor ! discardedOrder
-        kitchen ! discardedOrder
         assignments -= assignment.order
       case _ =>
-        orderMonitor ! discardedOrder // notify order processor to update order lifecycle
-        kitchen ! discardedOrder
+        discardedOrder.order.customer ! discardedOrder
+        orderMonitor ! discardedOrder
     })
+    self.tell(RequestCapacityUtilization,context.parent)
     assignments
   }
 }

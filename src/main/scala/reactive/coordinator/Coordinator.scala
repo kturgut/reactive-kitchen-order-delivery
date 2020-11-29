@@ -207,10 +207,6 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
       log.debug(s"Received update: $componentState")
       context.become(openForService(updatedState, updateSchedule(heartBeatSchedule, componentState)))
 
-    case CourierAvailability(active,_) =>
-      println // TODO
-
-
     case unhandled: UnhandledMessage =>
       log.debug(s"Unhandled message: ${unhandled}")
     case dead: DeadLetter =>
@@ -220,7 +216,6 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
   }
 
   import system.dispatcher
-
   def evaluateState(systemState: SystemState): SystemState = {
     val report = systemState.components.filter(_._2.state != Operational).map(comp => s"${comp._1} is ${comp._2.state}")
     if (report.nonEmpty) log.debug(s"System state not healthy:[${report.mkString("! ")}]")

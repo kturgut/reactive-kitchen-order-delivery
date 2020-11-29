@@ -86,11 +86,13 @@ class Dispatcher extends Actor with Stash with ActorLogging {
     case product: PackagedProduct =>
       val availability = CourierAvailability(router.routees.size, lastCourierId)
       if (availability.available > 0) {
-        log.debug(s"Dispatcher routing order with id:${product.order.id}. Total available couriers ${availability.available}/$lastCourierId.") // Available: ${available(router)}")
+        log.debug(s"Dispatcher routing order with id:${product.order.id}. " +
+          s"Total available couriers ${availability.available}/$lastCourierId.") // Available: ${available(router)}")
         router.route(product, sender())
+        // self.tell(ReportAvailability, sender())
       }
       else {
-        log.warning(s"Dispatcher does not have available routers. Declining delivery order. $availability")
+        log.warning(s"Dispatcher courier availability is:$availability. Declining delivery of order with id:${product.order.id}.")
         sender() ! DeclineCourierRequest(product,availability)
       }
 
@@ -105,11 +107,6 @@ class Dispatcher extends Actor with Stash with ActorLogging {
     // reroute if courier declines
     case DeclineCourierAssignment(name, courierRef, product, originalSender) =>
       log.debug(s"Courier $name declined assignment to ${product.order.id}, originalSender: ${originalSender}")
-//      if (router.routees.size > 0)
-//        log.error("THIS SHOULD NOT HAPPEN")
-//      val newRouter = router.removeRoutee(courierRef)
-//      log.debug(s"New available: ${available(newRouter)}")
-      // self ! product
       self.tell(product, originalSender)
       becomeActivate(orderMonitor, shelfManager, router.removeRoutee(courierRef), lastCourierId)
 
@@ -139,8 +136,9 @@ class Dispatcher extends Actor with Stash with ActorLogging {
     if (availability.available == 0 && availability.total < config.MaximumNumberOfCouriers) {
       self ! RecruitCouriers(config.NumberOfCouriersToRecruitInBatches, shelfManager, orderMonitor)
     }
-    if (availability.health < config.MinimumAvailableToRecruitedCouriersRatio)
-      context.parent ! availability
+    if (availability.health < config.MinimumAvailableToRecruitedCouriersRatio) {
+      log.warning(s"Recommended to increase number of couriers or slow down order processing: ${router.routees.size}/$lastCourierId")
+    }
     context.become(active(orderMonitor, shelfManager, router,lastCourierId))
   }
 
