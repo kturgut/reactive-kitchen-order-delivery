@@ -8,7 +8,7 @@ import reactive.coordinator.ComponentState.Operational
 import reactive.coordinator.Coordinator.ReportStatus
 import reactive.coordinator.{ComponentState, SystemState}
 import reactive.delivery.Courier.{CourierAssignment, Pickup, PickupRequest}
-import reactive.delivery.Dispatcher.ReportAvailability
+import reactive.delivery.Dispatcher.{DeclineCourierRequest, ReportAvailability}
 import reactive.order.{Order, Temperature}
 import reactive.{JacksonSerializable, ShelfManagerActor}
 
@@ -43,6 +43,7 @@ object ShelfManager {
 
   val ExpiredShelfLife = "ExpiredShelfLife"
   val ShelfCapacityExceeded ="ShelfCapacityExceeded"
+  val CourierNotAvailable ="CourierNotAvailable"
 
   def props(kitchenRef: ActorRef, orderMonitorRef: ActorRef, dispatcher:ActorRef) =
     Props(new ShelfManager(kitchenRef, orderMonitorRef,dispatcher))
@@ -62,7 +63,7 @@ object ShelfManager {
   /**
    *  Capacity Utilization is a number between [0,1]. 1 representing shelf is full at capacity
    */
-  case class CapacityUtilization(overflow: Float, allShelves: Float)
+  case class CapacityUtilization(overflow: Float, allShelves: Float, totalAvailableSpace:Int)
 
 }
 
@@ -102,6 +103,10 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorR
       log.debug(s"Putting new product ${product.prettyString} on shelf")
       // TODO handle the case if a packagedProduct for the same order is already on the Shelf. Discard previous one?
       val updatedAssignments = publishDiscardedOrders(storage.putPackageOnShelf(product), courierAssignments)
+      if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationSafetyThreshold) {
+        sender ! storage.capacityUtilization
+      }
+      self.tell(RequestCapacityUtilization, context.parent)
       context.become(readyForService(updatedAssignments, storage.snapshot()))
 
     // If product found and not expired return it, else if expired return discard order instead and notify order processor
@@ -121,6 +126,12 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorR
       log.debug(s"Shelf manager received assignment: ${assignment.prettyString}")
       context.become(readyForService((
         courierAssignments + (assignment.order -> assignment)).take(config.MaximumCourierAssignmentCacheSize), storage))
+
+    case DeclineCourierRequest(product,_) =>
+      storage.fetchPackageForOrder(product.order)
+      orderMonitor ! DiscardOrder(product.order,CourierNotAvailable,product.createdOn)
+      self.tell(RequestCapacityUtilization, context.parent)
+
 
     case RequestCapacityUtilization =>
       sender() ! storage.capacityUtilization

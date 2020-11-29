@@ -33,8 +33,9 @@ private[storage] case class Storage(log: LoggingAdapter,
   def isOverflowFull() = !hasAvailableSpaceFor(Temperature.All)
   lazy val totalCapacity = shelves.map(_._2.capacity).sum
   def totalNumberOfProductsOnShelves:Int = shelves.map(_._2.products.size).sum
+  def totalAvailableSpace = totalCapacity - totalNumberOfProductsOnShelves
   def capacityUtilization:CapacityUtilization = CapacityUtilization(capacityUtilization(Temperature.All),
-    totalNumberOfProductsOnShelves.toFloat / totalCapacity)
+    totalNumberOfProductsOnShelves.toFloat / totalCapacity, totalAvailableSpace)
   def capacityUtilization(temperature: Temperature):Float = {
     val select = shelves.values.filter(shelf => shelf.supports.contains(temperature))
     select.map(shelf=> shelf.products.size).sum.toFloat / select.map(_.capacity).sum

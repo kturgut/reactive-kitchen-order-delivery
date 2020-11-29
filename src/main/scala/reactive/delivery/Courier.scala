@@ -64,7 +64,7 @@ object Courier {
 
   case class DeliveryAcceptance(order: Order, signature: String, tips: Int, time: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable
 
-  case class DeclineCourierAssignment(courierRef: ActorRef, product: PackagedProduct, originalSender: ActorRef) extends JacksonSerializable
+  case class DeclineCourierAssignment(name:String, courierRef: ActorRef, product: PackagedProduct, originalSender: ActorRef) extends JacksonSerializable
 
   case class DeliveryComplete(assignment: CourierAssignment, product: PackagedProduct,
                               acceptance: DeliveryAcceptance, createdOn: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
@@ -143,7 +143,7 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
 
     case product: PackagedProduct =>
       log.warning(s"Courier $name received pickup order with id:${product.order.id} while already on delivery. Declining!")
-      context.parent ! DeclineCourierAssignment(self, product, sender())
+      context.parent ! DeclineCourierAssignment(name,self, product, sender())
   }
 
   def reminderToDeliver(courierActorRefToRemind: ActorRef): Cancellable = {

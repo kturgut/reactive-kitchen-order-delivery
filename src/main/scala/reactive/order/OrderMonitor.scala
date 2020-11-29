@@ -11,7 +11,7 @@ import reactive.coordinator.Coordinator.ReportStatus
 import reactive.coordinator.{ComponentState, Coordinator, SystemState}
 import reactive.delivery.Courier.DeliveryComplete
 import reactive.storage.PackagedProduct
-import reactive.storage.ShelfManager.DiscardOrder
+import reactive.storage.ShelfManager.{CourierNotAvailable, DiscardOrder, ExpiredShelfLife, ShelfCapacityExceeded}
 import reactive.{JacksonSerializable, OrderMonitorActor}
 import sun.tools.jconsole.ProxyClient.SnapshotMBeanServerConnection
 
@@ -156,6 +156,11 @@ case object OrderMonitor {
       else in
     }
 
+    private def reportFiltered(list:Iterable[OrderLifeCycle], filter:OrderLifeCycle=>Boolean, prefix:String, log:LoggingAdapter) = {
+      log.info(s"\n     $prefix order summary from order-life-cycle cache:")
+      list.filter(filter).foreach{life=>log info life.toShortString}
+    }
+
     def report(log:LoggingAdapter, message: String, verbose:Boolean = false) = {
       log.info(s"OrderLifeCycleMonitor $message:")
       log.info(s"  Total orders received:$orderCounter.")
@@ -166,19 +171,15 @@ case object OrderMonitor {
       log.info(s"  Total orders delivered:$deliveryCounter.")
       log.info(s"  Total orders discarded:$discardedOrderCounter.")
       if (verbose) {
-        log.info(s"\nINCOMPLETE order summary from order-life-cycle cache:")
-        activeOrders.values.filterNot(life=>life.completed).foreach {
-          life=> log info life.toShortString
-        }
-        log.info(s"\nDISCARDED order summary from order-life-cycle cache:")
-        activeOrders.values.filter(life=>life.discarded).foreach {
-          life=> log info life.toString
-        }
-        log.info(s"\nDELIVERED order summary from order-life-cycle cache:")
-        activeOrders.values.filter(life=>life.delivered).foreach {
-          life=> log info life.toString
-        }
-        log.info("!!!For orders not in cache you can do persistent query!!!")
+        log.info("\nDetail report for orders in cache below. For orders not in cache you can do persistent query!!!")
+        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>(!o.completed),s"\nIncomplete (possibly lost in system)",log)
+        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>
+          (o.discarded && o.discard.get.reason == ExpiredShelfLife ),s"\nDiscarded for $ExpiredShelfLife",log)
+        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>
+          (o.discarded && o.discard.get.reason == ShelfCapacityExceeded ),s"\nDiscarded for $ShelfCapacityExceeded",log)
+        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>
+          (o.discarded && o.discard.get.reason == CourierNotAvailable ),s"\nDiscarded for $CourierNotAvailable",log)
+        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>(o.delivered),s"\nDelivered",log)
       }
     }
 

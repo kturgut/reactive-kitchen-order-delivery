@@ -86,7 +86,7 @@ case class OrderLifeCycle(order: Order,
 
   def update(productUpdate: PackagedProduct, log: LoggingAdapter): OrderLifeCycle = {
     if (product.isDefined) {
-      log.warning(s"Product already created for order ${order.id}");
+      log.warning(s"Product for order with id:${order.id} is already created.");
       this
     }
     else {
@@ -96,10 +96,10 @@ case class OrderLifeCycle(order: Order,
 
   def update(deliveryUpdate: DeliveryComplete, log: LoggingAdapter): OrderLifeCycle = {
     if (delivery.isDefined) {
-      log.warning(s"Delivery already happened for order ${order.id}")
+      log.warning(s"Order with id:${order.id} is already delivered on ${delivery.get.createdOn}.")
     }
     if (discard.isDefined && delivery.isDefined) {
-      log.error(s"This order ${order.id} is already delivered on ${delivery.get.createdOn}, Ignoring discard notice");
+      log.error(s"Order with id:${order.id} is already delivered on ${delivery.get.createdOn}, Ignoring discard notice.");
       this
     }
     else this.copy(delivery = Some(deliveryUpdate))
@@ -107,10 +107,10 @@ case class OrderLifeCycle(order: Order,
 
   def update(discardUpdate: DiscardOrder, log: LoggingAdapter): OrderLifeCycle = {
     if (discard.isDefined) {
-      log.warning(s"This order already marked as discarded ${order.id}")
+      log.warning(s"Order with id:${order.id} is already discarded for ${discard.get.reason}. New discard for ${discardUpdate.reason} is ignored.")
     }
     if (delivery.isDefined) {
-      log.error(s"This order ${order.id} has been delivered on ${delivery.get.createdOn}, Ignoring discard notice");
+      log.error(s"Order with id:${order.id} is already delivered on ${delivery.get.createdOn}, Ignoring discard notice for ${discardUpdate.reason}.");
       this
     }
     else this.copy(discard = Some(discardUpdate))
