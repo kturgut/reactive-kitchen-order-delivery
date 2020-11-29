@@ -6,14 +6,13 @@ import reactive.coordinator.ComponentState.{Operational, UnhealthyButOperational
 import reactive.coordinator.Coordinator.ReportStatus
 import reactive.coordinator.{ComponentState, SystemState}
 import reactive.delivery.Courier.CourierAssignment
-import reactive.delivery.Dispatcher.{CourierAvailability, DeclineCourierRequest, RecruitCouriers, ReportAvailability}
+import reactive.delivery.Dispatcher.{CourierAvailability, DeclineCourierRequest, RecruitCouriers}
 import reactive.order.Order
 import reactive.storage.ShelfManager.CapacityUtilization
 import reactive.storage.{PackagedProduct, ShelfManager}
 import reactive.{JacksonSerializable, KitchenActor, ShelfManagerActor}
 
 import scala.concurrent.duration.FiniteDuration
-import scala.util.{Failure, Success}
 
 /**
  * Kitchen is a Stateless Actor. Parent Actor is CloudKitchens.
@@ -48,7 +47,7 @@ object Kitchen {
   val TurkishCousine = "Turkish"
   val AmericanCousine = "American"
 
-  def props(name: String, expectedOrdersPerSecond: Int) = Props(new Kitchen(name))
+  def props(name: String) = Props(new Kitchen(name))
 
   case class InitializeKitchen(orderMonitor: ActorRef,
                                dispatcher: ActorRef) extends JacksonSerializable
@@ -65,7 +64,6 @@ object Kitchen {
 class Kitchen(name: String) extends Actor with ActorLogging with Timers with Stash with Configs {
 
   import Kitchen._
-  import akka.pattern.ask
   import reactive.system.dispatcher
 
   implicit val timeout = kitchenConf.timeout
@@ -81,7 +79,8 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
           context.watch(shelfManager)
           shelfManager.tell(state.update(ComponentState(ShelfManagerActor, Operational, Some(shelfManager))), sender())
           dispatcher ! RecruitCouriers(dispatcherConf.NumberOfCouriersToRecruitInBatches, shelfManager, orderMonitor)
-          becomeActive(shelfManager, orderMonitor, dispatcher, CourierAvailability(100,100), CapacityUtilization(0,0,10))
+          becomeActive(shelfManager, orderMonitor, dispatcher,
+            CourierAvailability(100,100), CapacityUtilization(0,0,10), kitchenConf.MaxNumberOfOrdersBeforeSuspension)
       }
 
     case ReportStatus => sender() ! ComponentState(KitchenActor, ComponentState.Initializing, Some(self))
@@ -93,7 +92,9 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
              orderMonitor: ActorRef,
              courierDispatcher: ActorRef,
              courierAvailability:CourierAvailability,
-             shelfCapacity:CapacityUtilization): Receive = {
+             shelfCapacity:CapacityUtilization,
+             numberOfOrdersBeforeSuspension:Int
+            ): Receive = {
 
     case order: Order =>
       val product = PackagedProduct(order, courierConf.deliveryWindow)
@@ -101,6 +102,11 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
       shelfManager ! product
       courierDispatcher ! product
       orderMonitor ! product
+      if (numberOfOrdersBeforeSuspension<=1) {
+        becomeSuspended(reminderToResume(kitchenConf.SuspensionTimer), shelfManager, orderMonitor, courierDispatcher,courierAvailability,shelfCapacity)
+      } else {
+        becomeActive(shelfManager, orderMonitor, courierDispatcher,courierAvailability,shelfCapacity, numberOfOrdersBeforeSuspension-1)
+      }
 
     case availability@CourierAvailability(available, _) =>
       log.debug(s"Kitchen received courier availability: $available")
@@ -109,7 +115,7 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
       }
 
     case assignment: CourierAssignment =>
-      log.debug(s"Forwarding courier assignment to shelf for ${assignment.order.id} by ${assignment.courierName}")
+      log.debug(s"Forwarding courier assignment to shelf for id:${assignment.order.id} by ${assignment.courierName}")
       shelfManager ! assignment
 
     case decline@DeclineCourierRequest(_, availability) =>
@@ -171,7 +177,7 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
       becomeSuspended(reminderToResume(kitchenConf.SuspensionTimer), shelfManager, orderMonitor, courierDispatcher,availability,shelfCapacity)
 
     case assignment: CourierAssignment =>
-      log.debug(s"Forwarding courier assignment to shelf for ${assignment.order.id} by ${assignment.courierName}")
+      log.debug(s"Forwarding courier assignment to shelf for id:${assignment.order.id} by ${assignment.courierName}")
       shelfManager ! assignment
 
 
@@ -193,11 +199,16 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
     context.become(suspended(schedule, shelfManager, orderMonitor, dispatcher,courierAvailability,shelfCapacity))
   }
 
-  private def becomeActive(shelfManager: ActorRef, orderMonitor: ActorRef, dispatcher: ActorRef,courierAvailability: CourierAvailability,shelfCapacity: CapacityUtilization): Unit = {
+  private def becomeActive(shelfManager: ActorRef,
+                           orderMonitor: ActorRef,
+                           dispatcher: ActorRef,
+                           courierAvailability: CourierAvailability,
+                           shelfCapacity: CapacityUtilization,
+                           numberOfOrdersBeforeSuspension:Int): Unit = {
     suspensionCounter = 0
     log.debug(s"KITCHEN ACTIVE when $courierAvailability and $shelfCapacity")
     context.parent ! ComponentState(KitchenActor, Operational, Some(self), 1f)
-    context.become(active(shelfManager, orderMonitor, dispatcher,courierAvailability,shelfCapacity))
+    context.become(active(shelfManager, orderMonitor, dispatcher,courierAvailability,shelfCapacity,numberOfOrdersBeforeSuspension))
   }
 
   private def reminderToResume(pauseDuration: FiniteDuration): Cancellable = {
@@ -224,7 +235,12 @@ class Kitchen(name: String) extends Actor with ActorLogging with Timers with Sta
     else {
       log.debug(s"Resume operations: overflow shelf utilization is ${shelfCapacity.overflow}  and courier availability is ${courierAvailability.available}")
       unstashAll()
-      becomeActive(shelfManager, orderMonitor, courierDispatcher,courierAvailability,shelfCapacity)
+      becomeActive(shelfManager,
+        orderMonitor,
+        courierDispatcher,
+        courierAvailability,
+        shelfCapacity,
+        math.min(shelfCapacity.overflowAvailableSpace, kitchenConf.MaxNumberOfOrdersBeforeSuspension))
     }
   }
 

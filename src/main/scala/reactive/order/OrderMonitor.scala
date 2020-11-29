@@ -224,7 +224,7 @@ class OrderMonitor extends PersistentActor with ActorLogging {
       val event = DiscardOrderRecord(LocalDateTime.now(), discard)
       persist(event) { event =>
         log.debug(s"Order update: discarded: ${event.discard.order.name} " +
-          s"for ${event.discard.reason} id ${event.discard.order.id}. Total discarded:${state.discardedOrderCounter}")
+          s"for ${event.discard.reason} id:${event.discard.order.id}. Total discarded:${state.discardedOrderCounter}")
         updateState(event)
       }
 

@@ -18,15 +18,22 @@ private[storage] case class Shelf(name: String, supports: Seq[Temperature],
 
   import Shelf._
 
+
+  def snapshot():Shelf = copy(products = products.clone())
+
   def size: Int = products.size
 
   def hasAvailableSpace: Boolean = products.size < capacity
 
-  def overCapacity: Boolean = products.size > capacity
+  def isOverCapacity: Boolean = products.size > capacity
+
+  def availableSpace:Int = capacity - products.size
 
   def highestValueProduct: PackagedProduct = products.last
 
   def lowestValueProduct: PackagedProduct = products.head
+
+  def capacityUtilization:Float =  products.size.toFloat / capacity
 
   def +=(elem: PackagedProduct): Shelf = {
     assert(canAccept(elem.order), s"Shelf $name cannot accept products that are ${elem.order.temp}")
@@ -50,18 +57,20 @@ private[storage] case class Shelf(name: String, supports: Seq[Temperature],
     discarded.toSeq
   }
 
-  def productsDecreasingByOrderDate: List[PackagedProduct] = products.toList.sortBy(_.order.createdOn)(localDateTimeOrdering).reverse // TODO fix ordering to reverse
+  def productsDecreasingByOrderDate: List[PackagedProduct] = products.toList.sortBy(_.order.createdOn)(localDateTimeOrdering).reverse
 
-  def reportContents(log: LoggingAdapter, verbose: Boolean = false): Unit = {
-    log.info(s"$name shelf capacity utilization:${products.size} / $capacity, decay rate modifier:$decayModifier.")
-    if (verbose) log.info(s"       contents: ${products.map(product => (product.order.name, product.value)).mkString(",")}")
+  def reportContents(buffer:StringBuffer, verbose: Boolean = false): Unit = {
+    buffer.append(s"\n$name shelf capacity utilization: ${products.size}/$capacity, decay rate modifier:$decayModifier.")
+    if (verbose)
+      buffer.append(s"\n       contents: ${products.map(product => (s"id:${product.order.id}",product.order.name, product.value)).mkString(",")}")
+    else
+      buffer.append(s"\n       contents: ${products.map(product => (s"id:${product.order.id}", s"value:${product.value}")).mkString(",")}")
   }
 
   def refresh(time: LocalDateTime): Shelf = {
     products = products.map(_.phantomCopy(decayModifier, time))
     this
   }
-
 }
 
 private[storage] case object Shelf {

@@ -253,7 +253,7 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
       case CustomerActor => context.actorOf(Props[Customer], CustomerActor)
       case OrderProcessorActor => context.actorOf(Props[OrderProcessor], OrderProcessorActor)
       case OrderMonitorActor => context.actorOf(Props[OrderMonitor], OrderMonitorActor)
-      case KitchenActor => context.actorOf(Kitchen.props(Kitchen.TurkishCousine, 2), s"${KitchenActor}_${Kitchen.TurkishCousine}")
+      case KitchenActor => context.actorOf(Kitchen.props(Kitchen.TurkishCousine), s"${KitchenActor}_${Kitchen.TurkishCousine}")
       case DispatcherActor => context.actorOf(Props[Dispatcher], DispatcherActor)
       case name => throw new IllegalArgumentException(s"Unknown component name:$name")
     }

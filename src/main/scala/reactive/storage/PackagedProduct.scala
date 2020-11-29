@@ -21,7 +21,7 @@ final case class PackagedProduct(remainingShelfLife: Float,
   override def toString() = s"Product (name:${order.name}, temp:${order.temp}, remainingShelfLife:$remainingShelfLife, value:$value, " +
     s"createdOn:${createdOn.format(dateFormatter)}, lastUpdatedOn:${updatedOn.format(dateFormatter)}, id:${order.id})"
 
-  def prettyString = s"Product (${order.name} temp:${order.temp} remainingShelfLife:$remainingShelfLife, value:$value)"
+  def prettyString = s"Product (${order.name} temp:${order.temp} remainingShelfLife:$remainingShelfLife, value:$value id:${order.id})"
 
   /**
    * Creates a copy of the packaged product representing the updated state in time assuming it stayed in

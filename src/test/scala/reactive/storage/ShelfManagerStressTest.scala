@@ -104,7 +104,7 @@ class ShelfManagerStressTest  extends BaseSpec with StorageHelper {
       var discarded = List.empty[DiscardOrder]
       hots.foreach { product => discarded = discarded ++ storage.putPackageOnShelf(product, product.createdOn) ; report(storage,false)}
       assert(!overflow.hasAvailableSpace)
-      assert(!overflow.overCapacity)
+      assert(!overflow.isOverCapacity)
       assert(discarded.map(_.order) == (hots(7)::hots(8)::hots(9)::Nil).map(_.order))
     }
 
@@ -132,7 +132,7 @@ class ShelfManagerStressTest  extends BaseSpec with StorageHelper {
       )
       assert(discarded.map(_.order) == (hots(3)::hots(4)::hots(5)::Nil).map(_.order))
       assert(!overflow.hasAvailableSpace)
-      assert(!overflow.overCapacity)
+      assert(!overflow.isOverCapacity)
     }
 
 

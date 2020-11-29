@@ -53,7 +53,7 @@ object Courier {
 
   case class CourierAssignment(order: Order,
                                courierName: String, courierRef: ActorRef, createdOn: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
-    def prettyString = s"Courier ${courierName} is assigned to deliver order ${order.name} with id ${order.id}."
+    def prettyString = s"Courier ${courierName} is assigned to deliver order ${order.name} with id:${order.id}."
   }
 
   case class PickupRequest(assignment: CourierAssignment, time: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable

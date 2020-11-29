@@ -27,23 +27,28 @@ private[storage] case class Storage(log: LoggingAdapter,
   assert(tempSensitiveShelves.values.forall(_.decayModifier <= overflow.decayModifier),
     "Overflow shelf decayRate modifier is assumed to be higher or equal to other shelves'")
 
-  private lazy val overflow: Shelf = shelves(All)
+  lazy val overflow: Shelf = shelves(All)
+
   private lazy val tempSensitiveShelves: mutable.Map[Temperature, Shelf] = shelves - All
 
-  def isOverflowFull() = !hasAvailableSpaceFor(Temperature.All)
   lazy val totalCapacity = shelves.map(_._2.capacity).sum
+
   def totalNumberOfProductsOnShelves:Int = shelves.map(_._2.products.size).sum
+
   def totalAvailableSpace = totalCapacity - totalNumberOfProductsOnShelves
+
   def capacityUtilization:CapacityUtilization = CapacityUtilization(capacityUtilization(Temperature.All),
-    totalNumberOfProductsOnShelves.toFloat / totalCapacity, totalAvailableSpace)
+    totalNumberOfProductsOnShelves.toFloat / totalCapacity, overflow.availableSpace)
+
+  /**
+   * ratio of number of products on shelf / capacity aggregated for all shelves that support the given temperature
+   */
   def capacityUtilization(temperature: Temperature):Float = {
     val select = shelves.values.filter(shelf => shelf.supports.contains(temperature))
     select.map(shelf=> shelf.products.size).sum.toFloat / select.map(_.capacity).sum
   }
   def hasAvailableSpaceFor(temperature: Temperature) =
     shelves.values.filter(shelf => shelf.supports.contains(temperature)).find(_.hasAvailableSpace).isDefined
-
-
 
 
   /**
@@ -121,11 +126,11 @@ private[storage] case class Storage(log: LoggingAdapter,
   private def optimizeOverflowShelf(time: LocalDateTime): List[DiscardOrder] = {
     var discarded: List[DiscardOrder] = Nil
     moveProductsToEmptySpacesInTemperatureSensitiveShelves(time)
-    if (overflow.overCapacity) {
+    if (overflow.isOverCapacity) {
       var productPairs: List[ProductPair] = pairProductsForPotentialSwap()
       discarded = discardProductsThatWillExpireBeforeEarliestPossiblePickup(productPairs, time)
       productPairs = swapPairsOfProductsInCriticalZone(productPairs, time)
-      while (overflow.overCapacity) {
+      while (overflow.isOverCapacity) {
         discarded = discardDueToOverCapacity(overflow.productsDecreasingByOrderDate.head, overflow, time) :: discarded
       }
     }
@@ -165,7 +170,7 @@ private[storage] case class Storage(log: LoggingAdapter,
     log.debug(s"Moving ${product.prettyString} from ${source.name} to ${target.name}  ")
     target.products += updatedProduct
     source.products -= product
-    if (target.overCapacity) {
+    if (target.isOverCapacity) {
       val productToRemove = target.lowestValueProduct
       target.products -= productToRemove
       Some(productToRemove.phantomCopy(target.decayModifier, time))
@@ -218,25 +223,22 @@ private[storage] case class Storage(log: LoggingAdapter,
    */
   def snapshot(time: LocalDateTime = LocalDateTime.now()): Storage = {
     refresh(time)
-    copy(log, shelves.clone(), criticalTimeForSwapsThresholdMillis,time)
+    val clonedShelves = shelves.map(kv=> (kv._1,kv._2.snapshot()))
+    copy(log, clonedShelves, criticalTimeForSwapsThresholdMillis,time)
+  }
+  def reportStatus(verbose: Boolean = false): Unit = {
+    val buffer = new StringBuffer()
+    reportToBuffer(buffer, "\n",verbose)
+    log.info(buffer.append("\n").toString)
   }
 
-  def reportStatus(verbose: Boolean = false, time: LocalDateTime = LocalDateTime.now()): Unit = {
+  def reportToBuffer(buffer:StringBuffer, heading:String, verbose: Boolean, time: LocalDateTime = LocalDateTime.now()): Unit = {
     refresh(time)
-    log.info(s">> Storage capacity utilization: ${this.totalProductsOnShelves}/${this.totalCapacity}, last refreshed:$createdOn")
-    if (verbose) {
-      shelves.values.foreach(_.reportContents(log, verbose))
-    }
-    else {
-      overflow.products.groupBy(_.order.temperature).foreach {
-        case (temperature, productsInGroup) =>
-          log.debug(s"   $temperature -> $productsInGroup")
-          shelves.values.foreach(_.reportContents(log, verbose))
-      }
-    }
+    buffer.append(heading).append("\n")
+    buffer.append(s">>> Storage capacity utilization: ${this.totalProductsOnShelves}/${this.totalCapacity}, last refreshed:$createdOn")
+    shelves.toList.sortBy(_._1.toString).map(_._2).foreach(_.reportContents(buffer, verbose))
   }
 
   def totalProductsOnShelves: Int = shelves.values.map(_.size).sum
-
 
 }

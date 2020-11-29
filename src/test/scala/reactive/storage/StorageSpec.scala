@@ -41,7 +41,7 @@ class StorageSpec extends BaseSpec with StorageHelper {
     "store multiple products and preserve priority order" in {
       val shelf = Shelf.cold(3)
       assert(shelf.size == 0)
-      assert(shelf.hasAvailableSpace && !shelf.overCapacity)
+      assert(shelf.hasAvailableSpace && !shelf.isOverCapacity)
 
       shelf += product2
       assert(shelf.size == 1)
@@ -50,17 +50,17 @@ class StorageSpec extends BaseSpec with StorageHelper {
       shelf += product1
       assert(shelf.size == 2)
       assert(shelf.highestValueProduct == product2 && shelf.lowestValueProduct == product1)
-      assert(shelf.hasAvailableSpace && !shelf.overCapacity)
+      assert(shelf.hasAvailableSpace && !shelf.isOverCapacity)
 
       shelf += product3
       assert(shelf.size == 3)
       assert(shelf.highestValueProduct == product3 && shelf.lowestValueProduct == product1)
-      assert(!shelf.hasAvailableSpace && !shelf.overCapacity)
+      assert(!shelf.hasAvailableSpace && !shelf.isOverCapacity)
 
       shelf += product4
       assert(shelf.size == 4)
       assert(shelf.highestValueProduct == product4 && shelf.lowestValueProduct == product1)
-      assert(!shelf.hasAvailableSpace && shelf.overCapacity)
+      assert(!shelf.hasAvailableSpace && shelf.isOverCapacity)
 
       shelf -= product2
       shelf -= product4
@@ -174,7 +174,7 @@ class StorageSpec extends BaseSpec with StorageHelper {
       var discarded = List.empty[DiscardOrder]
       hots.foreach { product => discarded = discarded ++ storage.putPackageOnShelf(product, product.createdOn) ; report(storage,false)}
       assert(!overflow.hasAvailableSpace)
-      assert(!overflow.overCapacity)
+      assert(!overflow.isOverCapacity)
       assert(discarded.map(_.order) == (hots(7)::hots(8)::hots(9)::Nil).map(_.order))
     }
 
@@ -202,7 +202,7 @@ class StorageSpec extends BaseSpec with StorageHelper {
       )
       assert(discarded.map(_.order) == (hots(3)::hots(4)::hots(5)::Nil).map(_.order))
       assert(!overflow.hasAvailableSpace)
-      assert(!overflow.overCapacity)
+      assert(!overflow.isOverCapacity)
     }
 
 

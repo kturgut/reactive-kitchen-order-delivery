@@ -63,7 +63,7 @@ object ShelfManager {
   /**
    *  Capacity Utilization is a number between [0,1]. 1 representing shelf is full at capacity
    */
-  case class CapacityUtilization(overflow: Float, allShelves: Float, totalAvailableSpace:Int)
+  case class CapacityUtilization(overflow: Float, allShelves: Float, overflowAvailableSpace:Int)
 
 }
 
@@ -82,7 +82,7 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorR
 
     case _: SystemState | ReportStatus =>
       sender ! ComponentState(ShelfManagerActor, Operational, Some(self),
-        1f - storage.shelves(Temperature.All).products.size / storage.shelves(Temperature.All).capacity)
+        1f - storage.overflow.capacityUtilization)
 
     case RequestCapacityUtilization =>
       sender() ! storage.capacityUtilization
@@ -96,22 +96,23 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorR
 
     case ManageProductsOnShelves =>
       dispatcher.tell(ReportAvailability, kitchen)
-      val updatedAssignments = publishDiscardedOrders(storage.optimizeShelfPlacement(), courierAssignments)
-      log.debug(s"OVERFLOW PRODUCT SIZE: ${storage.shelves(Temperature.All).products.size}")
-      if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationReportingThreshold) {
+      val updatedAssignments = publishDiscardedOrders(storage.snapshot(),storage, storage.optimizeShelfPlacement(), courierAssignments)
+      log.debug(s"Overflow shelf capacity: [${storage.overflow.products.size/storage.overflow.capacity}]")
+      if (storage.overflow.capacityUtilization > config.OverflowUtilizationReportingThreshold) {
         storage.reportStatus(true)
       }
-      if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationSafetyThreshold) {
+      if (storage.overflow.capacityUtilization > config.OverflowUtilizationSafetyThreshold) {
         kitchen ! storage.capacityUtilization
       }
       context.become(readyForService(updatedAssignments, storage.snapshot()))
 
     case product: PackagedProduct =>
       log.debug(s"Putting new product ${product.prettyString} on shelf")
+      val prevState = storage.snapshot()
       storage.fetchPackageForOrder(product.order).foreach(product=>
         log.warning(s"Discarding previously created product for same order with id: ${product.order.id}"))
-      val updatedAssignments = publishDiscardedOrders(storage.putPackageOnShelf(product), courierAssignments)
-      if (storage.capacityUtilization(Temperature.All) > config.OverflowUtilizationSafetyThreshold) {
+      val updatedAssignments = publishDiscardedOrders(prevState,storage,storage.putPackageOnShelf(product), courierAssignments)
+      if (storage.overflow.capacityUtilization >= config.OverflowUtilizationSafetyThreshold) {
         sender ! storage.capacityUtilization
       }
       self.tell(RequestCapacityUtilization, context.parent)
@@ -137,16 +138,25 @@ class ShelfManager(kitchen: ActorRef, orderMonitor: ActorRef, dispatcher: ActorR
         courierAssignments + (assignment.order -> assignment)).take(config.MaximumCourierAssignmentCacheSize), storage))
 
     case DeclineCourierRequest(product,_) =>
+      val prevState = storage.snapshot()
       storage.fetchPackageForOrder(product.order)
-      publishDiscardedOrders(DiscardOrder(product.order,CourierNotAvailable,product.createdOn)::Nil, courierAssignments)
+      publishDiscardedOrders(prevState,storage,DiscardOrder(product.order,CourierNotAvailable,product.createdOn)::Nil, courierAssignments)
 
     case other => log.error(s"Received unrecognized message $other from sender: ${sender()}")
   }
 
-  private def publishDiscardedOrders(discardedOrders: Iterable[DiscardOrder],
+  private def publishDiscardedOrders(prevState:Storage, nextState:Storage, discardedOrders: Iterable[DiscardOrder],
                                      courierAssignments: ListMap[Order, CourierAssignment]): ListMap[Order, CourierAssignment] = {
     var assignments = courierAssignments
-    discardedOrders.foreach(discardedOrder => courierAssignments.get(discardedOrder.order) match {
+    val toBeDiscarded = discardedOrders.toList
+    if (discardedOrders.headOption.isDefined) {
+      val buffer = new StringBuffer()
+      val discardedInfo = toBeDiscarded.map(d=>s"id:${d.order.id}>${d.reason}").mkString("::")
+      prevState.reportToBuffer(buffer,s"\n\n\nContents BEFORE discarding products: [$discardedInfo]",true)
+      nextState.reportToBuffer(buffer,s"\n\nContents AFTER discarding products: [$discardedInfo]\n",false)
+      log.info(buffer.append("\n\n\n").toString)
+    }
+    toBeDiscarded.foreach(discardedOrder => courierAssignments.get(discardedOrder.order) match {
       case Some(assignment: CourierAssignment) =>
         log.debug(s"Sending discarded order notice $discardedOrder to courier ${assignment.courierRef}")
         assignment.courierRef ! discardedOrder

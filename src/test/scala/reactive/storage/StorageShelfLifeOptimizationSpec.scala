@@ -33,7 +33,7 @@ class StorageShelfLifeOptimizationSpec extends BaseSpec with StorageHelper {
 
       assert(storage.totalCapacity == 10)
       assert(storage.totalProductsOnShelves == 0)
-      assert(!storage.isOverflowFull())
+      assert(storage.overflow.hasAvailableSpace)
       storage.putPackageOnShelf(hots(0))
       assert(hot.size == 1)
       assert(overflow.size == 0)
@@ -57,7 +57,7 @@ class StorageShelfLifeOptimizationSpec extends BaseSpec with StorageHelper {
       assert(hot.size == 3)
       assert(overflow.size == 4)
       assert(!overflow.hasAvailableSpace)
-      assert(storage.isOverflowFull())
+      assert(!storage.overflow.hasAvailableSpace)
       (0 to 2) forall { i => hot.products.contains(hots(i)) }
       (3 to 6) forall { i => overflow.products.contains(hots(i)) }
     }
