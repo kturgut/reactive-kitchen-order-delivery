@@ -11,7 +11,7 @@ class CourierConfig(config: Config) extends Extension with ConfigBase {
   val DeliveryTimeWindowMillis: Long = config.getLong("delivery-time-window-millis")
   val EarliestDeliveryAfterOrderReceivedMillis: Long = config.getLong("earliest-delivery-after-order-received-millis")
 
-  def deliveryWindow:(Long,Long) = (EarliestDeliveryAfterOrderReceivedMillis,DeliveryTimeWindowMillis)
+  def deliveryWindow: (Long, Long) = (EarliestDeliveryAfterOrderReceivedMillis, DeliveryTimeWindowMillis)
 
 }
 

@@ -2,7 +2,6 @@ package reactive.config
 
 import akka.actor.Actor
 import akka.util.Timeout
-import com.typesafe.config.Config
 
 import scala.concurrent.duration.DurationInt
 
@@ -12,8 +11,8 @@ trait ConfigBase {
 
 }
 
-trait Configs  {
-  self:Actor =>
+trait Configs {
+  self: Actor =>
 
   val kitchenConf = KitchenConfig(context.system)
   val courierConf = CourierConfig(context.system)

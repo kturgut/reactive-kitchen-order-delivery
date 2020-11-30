@@ -9,10 +9,10 @@ class CustomerConfig(config: Config) extends Extension with ConfigBase {
 
   implicit def toFiniteDuration(d: java.time.Duration): FiniteDuration = Duration.fromNanos(d.toNanos)
 
-  val OnTimeDeliveryRecommendedTip:Int = config.getInt("on-time-delivery-recommended-tip")
-  val LateDeliveryRecommendedTip:Int = config.getInt("on-time-delivery-recommended-tip")
-  val CustomerHappinessInMillisThreshold:FiniteDuration = config.getDuration("customer-happiness-in-millis-threshold")
-  val SimulationOrderFilePath:String = config.getString("simulation-order-file-path")
+  val OnTimeDeliveryRecommendedTip: Int = config.getInt("on-time-delivery-recommended-tip")
+  val LateDeliveryRecommendedTip: Int = config.getInt("on-time-delivery-recommended-tip")
+  val CustomerHappinessInMillisThreshold: FiniteDuration = config.getDuration("customer-happiness-in-millis-threshold")
+  val SimulationOrderFilePath: String = config.getString("simulation-order-file-path")
 
 }
 

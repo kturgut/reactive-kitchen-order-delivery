@@ -1,8 +1,10 @@
 package reactive.coordinator
 
 import akka.actor.Props
+import akka.testkit.TestProbe
+import reactive.coordinator.ComponentState.Operational
 import reactive.coordinator.Coordinator.StartComponent
-import reactive.{BaseSpec, CoordinatorActor, KitchenActor, system}
+import reactive.{BaseSpec, CoordinatorActor, DispatcherActor, KitchenActor, OrderMonitorActor}
 
 class CoordinatorSpec extends BaseSpec {
 
@@ -13,8 +15,13 @@ class CoordinatorSpec extends BaseSpec {
     }
     "restart Kitchen if it is terminated" in {
       val coordinator = system.actorOf(Props[Coordinator], CoordinatorActor)
+      val dispatcher = TestProbe(DispatcherName)
+      val orderMonitor = TestProbe(OrderMonitorName)
       coordinator ! StartComponent(KitchenActor)
-
+      val dispatcherState = ComponentState(DispatcherActor, Operational, Some(dispatcher.ref),1f)
+      val orderMonitorState = ComponentState(OrderMonitorActor, Operational, Some(orderMonitor.ref),1f)
+      val systemState = SystemState(Map(DispatcherActor->dispatcherState,OrderMonitorActor->orderMonitorState))
+      //TODO
     }
     "restart Dispatcher if it is terminated" in {
     }
@@ -29,27 +36,8 @@ class CoordinatorSpec extends BaseSpec {
 
     "shutdown the system if no activity on OrderMonitor" in {
     }
+
     "send fake Orders to properly completed and delivered and track average processing time" in {
-
-    }
-  }
-
-  "An Kitchen" should {
-    "temporarily pause incoming order processing when Shelf capacity utilization is above threshold" in {
-
-    }
-
-    "temporarily pause incoming order processing when dispatcher couriers is below threshold" in {
-
-    }
-  }
-
-  "A Kitchen" should {
-    "temporarily pause incoming order processing when Shelf capacity utilization is above threshold" in {
-
-    }
-
-    "temporarily pause incoming order processing when dispatcher couriers is below threshold" in {
 
     }
   }

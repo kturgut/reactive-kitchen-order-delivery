@@ -11,47 +11,47 @@ import reactive.storage.PackagedProduct
 import reactive.storage.ShelfManager.DiscardOrder
 
 import scala.util.{Failure, Success}
-
+// @formatter:off
 /**
- * Courier is a Stateless Actor. Parent Actor is CourierDispatcher.
- * Couriers deliver the PackagedProducts to Customers.
- * Couriers are created by CourierDispatcher as needed.
- * Couriers are
+ * Courier is a Stateless Actor. Parent Actor is Dispatcher.
+ * Courier received a PackagedProduct as indication of a delivery request from Kitchen.
+ * Courier responds with CourierAssignment or DeclineCourierAssignment in response
+ * Once on CourierAssignment, it will communicate with ShelfManager requesting Pickup and then with Customer to request
+ * acceptance of delivery. All these changes in order life cycle are communicated to OrderMonitor for durable persistence.
  *
  * Courier can be in one of two states at any one time
- * 1- available
- * 2- onDelivery
+ *   1- available
+ *   2- onDelivery
  *
- * Timers: OneTime timer is created when courier goes from available to onDelivery.
+ * Timers
+ *   reminderToDeliver: This timer kicks in at random time within the delivery window. Delivery window can be configured from the config
+ *         For example: between 2-6 seconds after order is received.
  *
- * Couriers handle the following incoming messages
- * when available:
- * PackagedProduct =>
- * CourierAssignment to ShelfManager
- * OnAssignment to CourierDispatcher
- * Timer: Start a one time timer to send a 'DeliverNow' message to self within 2-6 seconds
- * become available.
- * when onDelivery:
- * DeliverNow =>
- * Send a PickupRequest to ShelfManager. (Expect to receive with a timeout). Response could be:
- * Pickup: This acknowledges that the product is ready to be picked up at ShelfManager
- * Courier sends a DeliveryAcceptanceRequest to Customer.
- * Customer currently only respond with DeliveryAcceptance with a tip amount. If this is received,
- * customer notifies the Order processor that Order is complete and dispatcher that he is available.
- * If no response received within timeout limit, Courier drops the order and notifies dispatcher.
- * DiscardOrder: which the Courier sends to itself
- * DiscardOrder => Send Available to CourierDispatcher, and become available.
- * PackagedProduct => If for any reason it receives a PackagedProduct while on Delivery,
- * Courier sends a DeclineAssignment to Dispatcher.
+ * Courier handles the following incoming messages
+ *   when available:
+ *      PackagedProduct =>
+ *          Courier responds with CourierAssignment to sender as well as its parent Dispatcher.
+ *          It sets a timer to remember to make the delivery within delivery window.
+ *          DeliveryWindow is controlled by config.
+ *   when active:
+ *       DeliverNow =>
+ *          Courier sends PickupRequest to ShelfManager expecting 'Pickup' as response. If it receives 'Pickup' it then
+ *          sends a DeliveryAcceptanceRequest to customer. If it receives DeliveryAcceptance from customer then this is a
+ *          successful delivery. OrderMonitor is notified with DeliveryComplete. Courier then notifies Dispatcher that it is
+ *          available for subsequent delivery
+ *
+ *          It is possible that PickupRequest gets a DiscardOrder response from ShelfManager. In this case Courier becomes
+ *          available for subsequent delivery.
  */
+// @formatter:on
 
 object Courier {
 
   def props(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) = Props(new Courier(name, orderMonitor, shelfManager))
 
-  case class CourierAssignment(order: Order,
-                               courierName: String, courierRef: ActorRef, createdOn: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
-    def prettyString = s"Courier ${courierName} is assigned to deliver order ${order.name} with id:${order.id}."
+  case class CourierAssignment(order: Order, courierName: String, courierRef: ActorRef,
+                               createdOn: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
+    def prettyString = s"Courier $courierName is assigned to deliver order ${order.name} with id:${order.id}."
   }
 
   case class PickupRequest(assignment: CourierAssignment, time: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable
@@ -60,9 +60,11 @@ object Courier {
 
   case class DeliveryAcceptanceRequest(order: Order) extends JacksonSerializable
 
-  case class DeliveryAcceptance(order: Order, signature: String, tips: Int, time: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable
+  case class DeliveryAcceptance(order: Order, signature: String, tips: Int,
+                                time: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable
 
-  case class DeclineCourierAssignment(name: String, courierRef: ActorRef, product: PackagedProduct, originalSender: ActorRef) extends JacksonSerializable
+  case class DeclineCourierAssignment(name: String, courierRef: ActorRef,
+                                      product: PackagedProduct, originalSender: ActorRef) extends JacksonSerializable
 
   case class DeliveryComplete(assignment: CourierAssignment, product: PackagedProduct,
                               acceptance: DeliveryAcceptance, createdOn: LocalDateTime = LocalDateTime.now()) extends JacksonSerializable {
@@ -80,15 +82,14 @@ object Courier {
 
 
 class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) extends Actor with ActorLogging {
-
-  val config = CourierConfig(context.system)
+  lazy val randomizer = new scala.util.Random(100L)
 
   import Courier._
   import akka.pattern.ask
   import reactive.system.dispatcher
 
-  lazy val randomizer = new scala.util.Random(100L)
   override val receive: Receive = available
+  val config = CourierConfig(context.system)
   implicit val timeout = config.timeout
 
   def available: Receive = {
@@ -96,10 +97,10 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
       val courier = self
       val assignment = CourierAssignment(product.order, name, courier)
       log.info(s"$name received order to pickup product: ${product.order.name} id:${product.order.id}")
-      context.parent ! assignment
       if (sender() != context.parent) {
         sender ! assignment
       }
+      context.parent ! assignment
       context.become(onDelivery(reminderToDeliver(self), assignment))
 
     case message =>
@@ -109,16 +110,15 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
   def onDelivery(scheduledAction: Cancellable, assignment: CourierAssignment): Receive = {
 
     case discard: DiscardOrder =>
-      log.info(s"Cancelling trip for delivery for ${assignment.order.name} " +
-        s"as product was discarded due to ${discard.reason} id:${assignment.order.id}")
+      log.info(s"$name cancelling delivery for discarded order with id:${assignment.order.id}. Reason:${discard.reason}")
       becomeAvailable(scheduledAction)
 
     case DeliverNow =>
       val future = shelfManager ? PickupRequest(assignment)
-      val action = scheduledAction // !!? Do not use scheduleAction directly as future may be executed on different thread
+      val action = scheduledAction
       future.onComplete {
         case Success(None) =>
-          log.info(s"Cancelling trip for delivery for ${assignment.order.name} as product was discarded. Reason unknown.")
+          log.info(s"Cancelling delivery for order with id:${assignment.order.id} as product could not be located on shelf. Reason unknown.")
           becomeAvailable(action)
         case Success(discard: DiscardOrder) => self ! discard
         case Success(pickup: Pickup) =>
@@ -146,6 +146,7 @@ class Courier(name: String, orderMonitor: ActorRef, shelfManager: ActorRef) exte
 
   def reminderToDeliver(courierActorRefToRemind: ActorRef): Cancellable = {
     val delay = randomizer.nextFloat() * config.DeliveryTimeWindowMillis + config.EarliestDeliveryAfterOrderReceivedMillis
+    log.debug(s"Courier $name's  expected time of delivery for in ${delay millis} millis")
     context.system.scheduler.scheduleOnce(delay millis) {
       courierActorRefToRemind ! DeliverNow
     }

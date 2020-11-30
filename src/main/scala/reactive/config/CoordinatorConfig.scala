@@ -6,16 +6,14 @@ import com.typesafe.config.Config
 import scala.concurrent.duration.{Duration, FiniteDuration}
 
 
-
-
 class CoordinatorConfig(config: Config) extends Extension with ConfigBase {
 
   implicit def toFiniteDuration(d: java.time.Duration): FiniteDuration = Duration.fromNanos(d.toNanos)
 
-  val HeartBeatScheduleMillis:FiniteDuration =
+  val HeartBeatScheduleMillis: FiniteDuration =
     config.getDuration("heart-beat-schedule-millis")
 
-  val InitializationTimeInMillis:FiniteDuration = config.
+  val InitializationTimeInMillis: FiniteDuration = config.
     getDuration("initialization-time-millis")
 
 }

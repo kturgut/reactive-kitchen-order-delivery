@@ -23,7 +23,7 @@ class OrderLifeCycleSpec extends BaseSpec {
     val time4 = fixedTime.plus(4, ChronoUnit.SECONDS)
 
     val packagedProduct = PackagedProduct(order, (2000, 6000), time1)
-    val agedProduct = packagedProduct.phantomCopy(2,time3)
+    val agedProduct = packagedProduct.phantomCopy(2, time3)
 
     val discardOrder = DiscardOrder(order, ExpiredShelfLife, time2)
     val courierAssignment = CourierAssignment(order, CourierName, courier.ref, time3)

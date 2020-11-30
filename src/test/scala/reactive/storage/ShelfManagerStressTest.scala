@@ -11,7 +11,7 @@ import reactive.storage.ShelfManager.DiscardOrder
 
 import scala.collection.mutable
 
-class ShelfManagerStressTest  extends BaseSpec with StorageHelper {
+class ShelfManagerStressTest extends BaseSpec with StorageHelper {
 
 
   "A Storage" should {
@@ -50,7 +50,7 @@ class ShelfManagerStressTest  extends BaseSpec with StorageHelper {
     "store a single product and give return a DiscardOrder if it expired before pickup" in {
       shelves.putPackageOnShelf(shortLifeProduct)
       assert(shelves.totalProductsOnShelves == 1)
-      shelves.pickupPackageForOrder(shortLifeProduct.order,later) match {
+      shelves.pickupPackageForOrder(shortLifeProduct.order, later) match {
         case Left(Some(_)) => fail("Should not have returned expired product")
         case Left(None) => fail("Should have found the product")
         case Right(discard: DiscardOrder) =>
@@ -62,7 +62,7 @@ class ShelfManagerStressTest  extends BaseSpec with StorageHelper {
       shelves.putPackageOnShelf(shortLifeProduct)
       val later = time.plus(500, ChronoUnit.MILLIS)
       assert(shelves.totalProductsOnShelves == 1)
-      assert(shortLifeProduct.order != longLifeProduct.order,later)
+      assert(shortLifeProduct.order != longLifeProduct.order, later)
       shelves.pickupPackageForOrder(longLifeProduct.order) match {
         case Left(Some(_)) => fail("Should not have found the product")
         case Left(None) => "Test Passed!"
@@ -102,10 +102,10 @@ class ShelfManagerStressTest  extends BaseSpec with StorageHelper {
         samplePackagedProduct(i, customer.ref, i, 0.5f, Hot, time.plus(i * 10, ChronoUnit.MILLIS))
       }
       var discarded = List.empty[DiscardOrder]
-      hots.foreach { product => discarded = discarded ++ storage.putPackageOnShelf(product, product.createdOn) ; report(storage,false)}
+      hots.foreach { product => discarded = discarded ++ storage.putPackageOnShelf(product, product.createdOn); report(storage, false) }
       assert(!overflow.hasAvailableSpace)
       assert(!overflow.isOverCapacity)
-      assert(discarded.map(_.order) == (hots(7)::hots(8)::hots(9)::Nil).map(_.order))
+      assert(discarded.map(_.order) == (hots(7) :: hots(8) :: hots(9) :: Nil).map(_.order))
     }
 
     "should discard most recent order if overflow capacity exceeded and none of the other products will expire for sure before delivery window" in {
@@ -114,27 +114,26 @@ class ShelfManagerStressTest  extends BaseSpec with StorageHelper {
       var storage = Storage(NoLogging, mutable.Map(Temperature.Hot -> hot, Temperature.All -> overflow))
       var later = time.plus(11, ChronoUnit.SECONDS)
       val hots: IndexedSeq[PackagedProduct] = for (i <- 0 until 10) yield {
-        samplePackagedProduct(i, customer.ref, i + 100, 0.5f + i*0.01f, Hot, time.plus(-i*500, ChronoUnit.MILLIS))
+        samplePackagedProduct(i, customer.ref, i + 100, 0.5f + i * 0.01f, Hot, time.plus(-i * 500, ChronoUnit.MILLIS))
       }
       hots.foreach(println)
       var discarded = List.empty[DiscardOrder]
-      (0 to 6).map(hots(_)).foreach { product => discarded = discarded ++ storage.putPackageOnShelf(product, later)}
-      val actualOverflowShelfData = (for (i<-7 until 10) yield {
+      (0 to 6).map(hots(_)).foreach { product => discarded = discarded ++ storage.putPackageOnShelf(product, later) }
+      val actualOverflowShelfData = (for (i <- 7 until 10) yield {
         val product = hots(i);
         discarded = discarded ++ storage.putPackageOnShelf(product, later);
-        report(storage,false)
+        report(storage, false)
         (discarded.last.order.id, collectShelfData(overflow))
       }).toMap
-      val expectedOverflowShelfData = Map (
-        "3" -> List ( ("4",76.96f,0.74f),("5",76.65f,0.73f),("6",76.32f,0.71999997f),("7",75.97f,0.71000004f)),
-        "4" -> List ( ("5",76.65f,0.73f),("6",76.32f,0.71999997f),("7",75.97f,0.71000004f),("8",75.6f,0.7f)),
-        "5" -> List (("6",76.32f,0.71999997f),("7",75.97f,0.71000004f),("8",75.6f,0.7f),("9",75.21f,0.69f))
+      val expectedOverflowShelfData = Map(
+        "3" -> List(("4", 76.96f, 0.74f), ("5", 76.65f, 0.73f), ("6", 76.32f, 0.71999997f), ("7", 75.97f, 0.71000004f)),
+        "4" -> List(("5", 76.65f, 0.73f), ("6", 76.32f, 0.71999997f), ("7", 75.97f, 0.71000004f), ("8", 75.6f, 0.7f)),
+        "5" -> List(("6", 76.32f, 0.71999997f), ("7", 75.97f, 0.71000004f), ("8", 75.6f, 0.7f), ("9", 75.21f, 0.69f))
       )
-      assert(discarded.map(_.order) == (hots(3)::hots(4)::hots(5)::Nil).map(_.order))
+      assert(discarded.map(_.order) == (hots(3) :: hots(4) :: hots(5) :: Nil).map(_.order))
       assert(!overflow.hasAvailableSpace)
       assert(!overflow.isOverCapacity)
     }
-
 
 
   }

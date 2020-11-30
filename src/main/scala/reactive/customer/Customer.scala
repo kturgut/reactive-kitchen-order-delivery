@@ -20,6 +20,7 @@ import spray.json._
 
 import scala.concurrent.duration.DurationInt
 
+// @formatter:off
 /**
  * Customer is a stateless Actor.
  * Currently it handles these incoming messages:
@@ -36,6 +37,8 @@ import scala.concurrent.duration.DurationInt
  *
  * TODO send DiscardOrder notice to Customer too
  */
+// @formatter:on
+
 object Customer {
 
   case class SimulateOrdersFromFile(orderHandler: ActorRef,
@@ -52,7 +55,9 @@ class Customer extends Actor with ActorLogging {
 
   val config = CustomerConfig(context.system)
 
-  // OrderMonitor sends lastOrderReceived to Customer from persistent store, before starting simulation.
+  /**
+   * OrderMonitor sends lastOrderReceived to Customer from persistent store, before starting simulation.
+   */
   var lastOrderOption: Option[OrderLifeCycle] = None
 
   override def receive: Receive = {

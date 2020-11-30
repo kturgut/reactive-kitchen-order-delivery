@@ -1,24 +1,29 @@
 package reactive.delivery
 
+import java.time.LocalDateTime
+
 import akka.actor.{ActorRef, ActorSystem, Cancellable, Props}
 import akka.testkit.{TestActorRef, TestProbe}
 import com.typesafe.config.ConfigFactory
 import reactive.BaseSpec
 import reactive.delivery.Courier._
+import reactive.storage.ShelfManager.DiscardOrder
 
-import scala.concurrent.duration.{Duration, DurationInt}
+import scala.concurrent.duration.Duration
 
 class CourierSpec extends BaseSpec {
 
   "A CourierActor" should {
     "send an Assignment to OrderProcessor and ShelfManager when available" in {
-      val orderProcessor = TestProbe(OrderProcessorName)
+      val orderMonitor = TestProbe(OrderMonitorName)
       val shelfManager = TestProbe(ShelfManagerName)
-      val courier = system.actorOf(Courier.props(CourierName, orderProcessor.ref, shelfManager.ref))
-      val (product, assignment) = samplePackagedProductAndAssignment(1, orderProcessor.ref, courier)
+      val kitchen = TestProbe(KitchenName)
+      val courier = system.actorOf(Courier.props(CourierName, orderMonitor.ref, shelfManager.ref))
+      val (product, assignment) = samplePackagedProductAndAssignment(1, orderMonitor.ref, courier)
       courier ! product
-      assertEquals(shelfManager.expectMsgType[CourierAssignment], assignment)
+      assertEquals(expectMsgType[CourierAssignment], assignment)
     }
+
     "declare itself unavailable to parent CourierDispatcher, after it receives a delivery order" in {
       val orderProcessor = TestProbe(OrderProcessorName)
       val shelfManager = TestProbe(ShelfManagerName)
@@ -29,74 +34,69 @@ class CourierSpec extends BaseSpec {
       courier ! product
       dispatcher.expectMsgType[CourierAssignment]
     }
+
     "successfully deliver order to customer within delivery window, happy path" in {
       val orderMonitor = TestProbe(OrderMonitorName)
       val shelfManager = TestProbe(ShelfManagerName)
-      val courier = impatientCourier(orderMonitor.ref,shelfManager.ref)
+      val courier = impatientCourier(orderMonitor.ref, shelfManager.ref)
       val customer = TestProbe()
       val (product1, assignment1) = samplePackagedProductAndAssignment(1, customer.ref, courier)
-      courier ! product1
-      //dispatcher.expectMsg(OnAssignment(courier))
-      val receivedAssignment = shelfManager.expectMsgType[CourierAssignment]
-      assert(assignment1.courierRef == courier)
-      assert(receivedAssignment.courierRef == courier)
-      val request = shelfManager.expectMsgType[PickupRequest]
-      assert(request.assignment.order.id == receivedAssignment.order.id)
-      assert(request.assignment.courierRef == receivedAssignment.courierRef)
-      shelfManager.reply(Pickup(product1))
+      val acceptance = DeliveryAcceptance(product1.order, "Thanks", 5)
+      val pickup = Pickup(product1)
+      val deliveryComplete = DeliveryComplete(assignment1, pickup.product, acceptance)
 
+      courier ! product1
+      expectMsgType[CourierAssignment]
+      shelfManager.expectMsgType[PickupRequest]
+      shelfManager.reply(pickup)
       customer.expectMsgType[DeliveryAcceptanceRequest]
-      customer.reply(DeliveryAcceptance(product1.order, "Happy Customer", 5))
-//        dispatcher.expectMsgType[Available]
+      customer.reply(acceptance)
+      val received = orderMonitor.expectMsgType[DeliveryComplete]
+      assert(received.acceptance == deliveryComplete.acceptance)
+      assert(received.assignment.courierName == deliveryComplete.assignment.courierName)
+      assert(received.assignment.order == deliveryComplete.assignment.order)
+      assert(received.product == deliveryComplete.product)
     }
-    "should decline additional work while on assignment" in {
+
+    "become available after Shelf Manager returns a DiscardOrder and handle another order" in {
       val orderMonitor = TestProbe(OrderMonitorName)
       val shelfManager = TestProbe(ShelfManagerName)
-      val courier = impatientCourier(orderMonitor.ref,shelfManager.ref)
+      val courier = impatientCourier(orderMonitor.ref, shelfManager.ref)
       val customer = TestProbe()
       val (product1, _) = samplePackagedProductAndAssignment(1, customer.ref, courier)
-      val (product2, _) = samplePackagedProductAndAssignment(2, customer.ref, courier)
+      val (product2, _) = samplePackagedProductAndAssignment(1, customer.ref, courier)
+      val discard = DiscardOrder(product1.order, "JustToTest", LocalDateTime.now())
+
       courier ! product1
-      courier ! product2
-      shelfManager.expectMsgType[CourierAssignment]
-      courier ! product2
+      expectMsgType[CourierAssignment]
       shelfManager.expectMsgType[PickupRequest]
-      shelfManager.reply(Pickup(product1))
+      shelfManager.reply(discard)
       courier ! product2
-      customer.expectMsgType[DeliveryAcceptanceRequest]
-      customer.reply(DeliveryAcceptance(product1.order, "Happy Customer", 5))
-      courier ! product2
+      // expectMsgType[CourierAssignment]
     }
+
   }
 
-  def impatientCourier(orderMonitor:ActorRef,shelfManager:ActorRef) = {
+
+  /**
+   * creates an impatient Courier under system context
+   */
+  def impatientCourier(orderMonitor: ActorRef, shelfManager: ActorRef) = {
     implicit val ec: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.global
     system.actorOf(Props(new Courier(CourierName, orderMonitor, shelfManager) {
-    override def reminderToDeliver(courierActorRefToRemind: ActorRef): Cancellable = {
-      courierActorRefToRemind ! DeliverNow
-      context.system.scheduler.scheduleOnce(Duration.Zero) {
+      override def reminderToDeliver(courierActorRefToRemind: ActorRef): Cancellable = {
+        courierActorRefToRemind ! DeliverNow
+        context.system.scheduler.scheduleOnce(Duration.Zero) {
+        }
       }
-    }
-  }))}
+    }))
+  }
 
-//  private def createParentForwarder(probe: TestProbe, actorProps: Props): ActorRef = {
-//    val parent = TestActorRef(new Actor {
-//
-//      val someActor = context.actorOf(actorProps, "someActor")
-//
-//      def receive = {
-//        case x =>
-//          probe.ref forward x
-//
-//      }
-//    })
-//
-//    parent.underlying.child("someActor").get
-//  }
 
-  def customActorSystem():ActorSystem = {
+  def customActorSystem(): ActorSystem = {
     ActorSystem("testsystem",
-            ConfigFactory.parseString("""
+      ConfigFactory.parseString(
+        """
               akka.loggers = ["akka.testkit.TestEventListener"]
       """))
   }

@@ -20,7 +20,7 @@ class PackagedProductTestSpec extends BaseSpec {
       val time2 = fixedTime.plus(2, ChronoUnit.SECONDS)
       val order = Order("1", "Ayran", "hot", 10, 0.3f, customer.ref, fixedTime)
       val packagedProduct = PackagedProduct(order, (2000, 6000), time1)
-      val anotherProduct = PackagedProduct(order, (2000, 6000), time1)
+      val anotherProduct = PackagedProduct(order, (2000, 6000), time2)
       val agedProduct = packagedProduct.phantomCopy(2, time2)
       assert(packagedProduct != agedProduct)
       assert(packagedProduct != anotherProduct)

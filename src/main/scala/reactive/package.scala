@@ -1,5 +1,4 @@
 import akka.actor.ActorSystem
-import reactive.coordinator.Coordinator
 
 
 package object reactive {

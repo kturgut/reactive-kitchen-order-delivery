@@ -1,7 +1,6 @@
 package reactive.order
 
 import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 
 import akka.actor.ActorRef
 import akka.event.LoggingAdapter
@@ -70,7 +69,14 @@ case object Order {
   }
 }
 
-
+/**
+ * Order goes through these stages in its life cycle:
+ * - Created => Order
+ * - Produced => PackagedProduct
+ * - Assigned to a courier => CourierAssignement (not tracked currently)
+ * - Discarded => DiscardOrder
+ * - Completed => DeliveryComplete
+ */
 case class OrderLifeCycle(order: Order,
                           product: Option[PackagedProduct] = None,
                           delivery: Option[DeliveryComplete] = None,
@@ -118,14 +124,17 @@ case class OrderLifeCycle(order: Order,
 
   def toShortString(): String = {
     val dateFormatter = PackagedProduct.dateFormatter
-    s"Order id:${order.id} '${order.name}' shelfLife:${order.shelfLife} ${((delivery, discard, product) match {
-      case (Some(delivery), None, _) => s"delivered value:${delivery.product.value} " +
-        s"tips:${delivery.acceptance.tips} on:${delivery.createdOn.format(dateFormatter)}"
-      case (None, Some(discardOrder), _) => s"discarded:${discardOrder.reason} on:${discardOrder.createdOn.format(dateFormatter)}"
-      case (None,None, Some(packagedProduct)) => s"produced on:${packagedProduct.createdOn.format(dateFormatter)}"
-      case _=> s"received on:${order.createdOn.format(dateFormatter)}"
-    })}"
+    s"Order id:${order.id} '${order.name}' shelfLife:${order.shelfLife} ${
+      ((delivery, discard, product) match {
+        case (Some(delivery), None, _) => s"delivered value:${delivery.product.value} " +
+          s"tips:${delivery.acceptance.tips} on:${delivery.createdOn.format(dateFormatter)}"
+        case (None, Some(discardOrder), _) => s"discarded:${discardOrder.reason} on:${discardOrder.createdOn.format(dateFormatter)}"
+        case (None, None, Some(packagedProduct)) => s"produced on:${packagedProduct.createdOn.format(dateFormatter)}"
+        case _ => s"received on:${order.createdOn.format(dateFormatter)}"
+      })
+    }"
   }
+
   override def toString(): String = {
     val dateFormatter = PackagedProduct.dateFormatter
     val buffer = new StringBuffer(s"Order id:${order.id} '${order.name}' " +

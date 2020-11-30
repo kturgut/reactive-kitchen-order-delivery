@@ -1,53 +1,65 @@
 package reactive.delivery
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Stash, Terminated}
-import akka.routing.{ActorRefRoutee, BroadcastRoutingLogic, RoundRobinRoutingLogic, Routee, Router, SmallestMailboxRoutingLogic}
-import akka.serialization.jackson.JacksonObjectMapperProviderSetup
-import reactive.{DispatcherActor, JacksonSerializable}
+import akka.routing._
 import reactive.config.DispatcherConfig
 import reactive.coordinator.ComponentState.{Initializing, Operational, State, UnhealthyButOperational}
 import reactive.coordinator.Coordinator.ReportStatus
 import reactive.coordinator.{ComponentState, SystemState}
 import reactive.storage.PackagedProduct
+import reactive.{DispatcherActor, JacksonSerializable}
 
+// @formatter:off
 /**
- * CourierDispatcher is a Stateless Actor. Parent Actor is CloudKitchens.
- * CouriersDispatcher routes PackagedProducts sent from ShelfManager to Couriers.
- * Couriers after receiving the PackagedProduct info respond directly to Shelf Manager with CourierAssignment
+ * Dispatcher is a Stateless Actor. Parent Actor is Coordinator.
+ * Dispatcher routes PackagedProducts sent from ShelfManager to Couriers.
+ * Couriers after receiving the PackagedProduct info respond directly to sender as well as Dispatcher with CourierAssignment
  *
- * CourierDispatcher can be in one of two states at any one time
- * 1- closedForService
- * 2- active
+ * Dispatcher can be in one of two states at any one time
+ *   1- closedForService
+ *   2- active
  *
  * CourierDispatcher handles the following incoming messages
- * when closedForService:
- * KitchenReadyForService =>
- * This initializes the CourierDispatcher as it creates Couriers and establishes a RoundRobin route
- * as it transitions to Active state.
- * Currently number of Couriers to be created is chosen as a function of the incoming order throttle threshold.
- * If Messages are sent to CourierDispatcher before KitchenReadyForService is received, these messages are
- * stashed in mailbox to be replayed right after the initialization is complete.
- * when active:
- * PackagedProduct => they get routed to a single Courier in RoundRobin fashion
- * Available => Courier notifies Dispatcher when it becomes available after completing delivery and gets added as a Routee
- * OnAssignment => Courier notifies Dispatcher when it becomes unavailable and gets removed from the router as a Routee
- * DeclineAssignment => Couriers can for whatever reason decline an assignment and gets removed from the router as a Routee
- * Terminated => Since Dispatcher is a supervisor of Courier it watches the transitions in its lifecycle
- * Hence when Dispatcher receives that one of its Couriers have been Terminated for any reason,
- * it will replace it with another one.
- * DiscardOrder => Send Available to CourierDispatcher, and become available.
+ *   when closedForService:
+ *      SystemState (with ShelfManager and OrderMonitor actors) =>
+ *          This initializes the Dispatcher as it creates Couriers and establishes a RoundRobin route
+ *          as it transitions to Active state.
+ *          To model after real-life scenario: Couriers are created in batches, up to a maximum number of couriers.
+ *          Both batch size as well as max couriers are controlled by the Config.
+ *          If Messages are sent to CourierDispatcher before KitchenReadyForService is received, these messages are
+ *          stashed in mailbox to be replayed right after the initialization is complete.
+ *   when active:
+ *       PackagedProduct =>
+ *          PackagedProduct gets routed to a single Courier in RoundRobin fashion using SmallestMailboxRoutingLogic.
+ *          If no Courier is available, Dispatcher responds with DeclineCourierRequest to sender.
+ *       Available =>
+ *          Courier notifies Dispatcher when it becomes available after completing delivery and gets added as a Routee
+ *       CourierAssignment =>
+ *          Courier is removed from the router as a Routee
+ *       DeclineCourierAssignment =>
+ *          Courier may choose to decline the assignment, in such case, it is removed from router.
+ *       Available =>
+ *          Courier is added to the router as a Routee when available.
+ *       Terminated =>
+ *           Since Dispatcher is a supervisor of Courier it watches the transitions in its lifecycle. It will replace a dead Courier
  */
+// @formatter:on
+
 
 object Dispatcher {
 
   case class RecruitCouriers(numberOfCouriers: Int, shelfManager: ActorRef, orderMonitor: ActorRef) extends JacksonSerializable
 
   case class CourierAvailability(available: Int, total: Int) extends JacksonSerializable {
-    def health:Float = available.toFloat / total
-    def state(config:DispatcherConfig): State = if (health < config.MinimumAvailableToRecruitedCouriersRatio) UnhealthyButOperational else Operational
+    def state(config: DispatcherConfig): State = if (health < config.MinimumAvailableToRecruitedCouriersRatio) UnhealthyButOperational else Operational
+
+    def health: Float = available.toFloat / total
   }
-  case class DeclineCourierRequest(product:PackagedProduct, availability:CourierAvailability) extends JacksonSerializable
+
+  case class DeclineCourierRequest(product: PackagedProduct, availability: CourierAvailability) extends JacksonSerializable
+
   case object ReportAvailability
+
 }
 
 class Dispatcher extends Actor with Stash with ActorLogging {
@@ -58,8 +70,6 @@ class Dispatcher extends Actor with Stash with ActorLogging {
   val config = DispatcherConfig(context.system)
 
   override val receive: Receive = closedForService
-
-  def numberOfCouriers(maxNumberOfOrdersPerSecond: Int): Int = maxNumberOfOrdersPerSecond * 10
 
   def closedForService: Receive = {
 
@@ -89,14 +99,13 @@ class Dispatcher extends Actor with Stash with ActorLogging {
         log.debug(s"Dispatcher routing order with id:${product.order.id}. " +
           s"Total available couriers ${availability.available}/$lastCourierId.") // Available: ${available(router)}")
         router.route(product, sender())
-        // self.tell(ReportAvailability, sender())
       }
       else {
         log.warning(s"Dispatcher courier availability is:$availability. Declining delivery of order with id:${product.order.id}.")
-        sender() ! DeclineCourierRequest(product,availability)
+        sender() ! DeclineCourierRequest(product, availability)
       }
 
-    case CourierAssignment(order,courierName,courierRef,_) =>
+    case CourierAssignment(order, courierName, courierRef, _) =>
       log.info(s"Courier ${courierName} is now on assignment of id:${order.id}. Total available couriers ${router.routees.size}/$lastCourierId")
       becomeActivate(orderMonitor, shelfManager, router.removeRoutee(courierRef), lastCourierId)
 
@@ -139,7 +148,7 @@ class Dispatcher extends Actor with Stash with ActorLogging {
     if (availability.health < config.MinimumAvailableToRecruitedCouriersRatio) {
       log.warning(s"Recommended to increase number of couriers or slow down order processing: ${router.routees.size}/$lastCourierId")
     }
-    context.become(active(orderMonitor, shelfManager, router,lastCourierId))
+    context.become(active(orderMonitor, shelfManager, router, lastCourierId))
   }
 
   /**
@@ -147,21 +156,20 @@ class Dispatcher extends Actor with Stash with ActorLogging {
    */
   def asBroadcastRouter(router: Router) = router.copy(logic = BroadcastRoutingLogic())
 
-  def recruitCouriers(demand: RecruitCouriers, lastCourierId: Int = 0, oldRouter:Router) = {
-    val finalCourierId = math.min(lastCourierId + demand.numberOfCouriers,config.MaximumNumberOfCouriers)
+  def recruitCouriers(demand: RecruitCouriers, lastCourierId: Int = 0, oldRouter: Router) = {
+    val finalCourierId = math.min(lastCourierId + demand.numberOfCouriers, config.MaximumNumberOfCouriers)
     val newSlaves = for (id <- lastCourierId + 1 to finalCourierId) yield {
       val courier = context.actorOf(Courier.props(s"Courier_$id", demand.orderMonitor, demand.shelfManager), s"Courier_$id")
       context.watch(courier)
       ActorRefRoutee(courier)
     }
-    //val router = Router(RoundRobinRoutingLogic(), oldRouter.routees ++ newSlaves)
     val router = Router(SmallestMailboxRoutingLogic(), oldRouter.routees ++ newSlaves)
     log.info(s"Dispatcher ready for service with ${router.routees.size} couriers out of $finalCourierId total!")
     unstashAll()
     context.become(active(demand.orderMonitor, demand.shelfManager, router, finalCourierId))
   }
 
-  def available(router:Router):String = {
+  def available(router: Router): String = {
     router.routees.mkString(",")
   }
 

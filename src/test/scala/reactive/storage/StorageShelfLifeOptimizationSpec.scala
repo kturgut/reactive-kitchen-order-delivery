@@ -6,9 +6,7 @@ import java.time.temporal.ChronoUnit
 import akka.event.NoLogging
 import akka.testkit.TestProbe
 import reactive.BaseSpec
-import reactive.customer.Customer
 import reactive.order.Temperature
-import reactive.storage.ShelfManager.DiscardOrder
 
 import scala.collection.mutable
 

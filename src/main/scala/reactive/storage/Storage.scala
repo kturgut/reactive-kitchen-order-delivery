@@ -9,18 +9,17 @@ import reactive.order.{Order, Temperature}
 import reactive.storage.ShelfManager.{CapacityUtilization, DiscardOrder, ExpiredShelfLife, ShelfCapacityExceeded}
 
 import scala.collection.mutable
-import scala.concurrent.duration.FiniteDuration
 
 private[storage] case object Storage {
-  def apply(log: LoggingAdapter, config:ShelfConfig, criticalTimeForSwapsThresholdMillis:Long):Storage = {
+  def apply(log: LoggingAdapter, config: ShelfConfig, criticalTimeForSwapsThresholdMillis: Long): Storage = {
     apply(log, Shelf.temperatureSensitiveShelves(config), criticalTimeForSwapsThresholdMillis)
-    new Storage(log,  Shelf.temperatureSensitiveShelves(config), criticalTimeForSwapsThresholdMillis)
+    new Storage(log, Shelf.temperatureSensitiveShelves(config), criticalTimeForSwapsThresholdMillis)
   }
 }
 
 private[storage] case class Storage(log: LoggingAdapter,
                                     shelves: mutable.Map[Temperature, Shelf],
-                                    criticalTimeForSwapsThresholdMillis:Long = 2000,
+                                    criticalTimeForSwapsThresholdMillis: Long = 2000,
                                     createdOn: LocalDateTime = LocalDateTime.now()) {
 
   assert(shelves.contains(All), "Overflow shelf not registered")
@@ -28,25 +27,24 @@ private[storage] case class Storage(log: LoggingAdapter,
     "Overflow shelf decayRate modifier is assumed to be higher or equal to other shelves'")
 
   lazy val overflow: Shelf = shelves(All)
-
-  private lazy val tempSensitiveShelves: mutable.Map[Temperature, Shelf] = shelves - All
-
   lazy val totalCapacity = shelves.map(_._2.capacity).sum
-
-  def totalNumberOfProductsOnShelves:Int = shelves.map(_._2.products.size).sum
+  private lazy val tempSensitiveShelves: mutable.Map[Temperature, Shelf] = shelves - All
 
   def totalAvailableSpace = totalCapacity - totalNumberOfProductsOnShelves
 
-  def capacityUtilization:CapacityUtilization = CapacityUtilization(capacityUtilization(Temperature.All),
+  def capacityUtilization: CapacityUtilization = CapacityUtilization(capacityUtilization(Temperature.All),
     totalNumberOfProductsOnShelves.toFloat / totalCapacity, overflow.availableSpace)
+
+  def totalNumberOfProductsOnShelves: Int = shelves.map(_._2.products.size).sum
 
   /**
    * ratio of number of products on shelf / capacity aggregated for all shelves that support the given temperature
    */
-  def capacityUtilization(temperature: Temperature):Float = {
+  def capacityUtilization(temperature: Temperature): Float = {
     val select = shelves.values.filter(shelf => shelf.supports.contains(temperature))
-    select.map(shelf=> shelf.products.size).sum.toFloat / select.map(_.capacity).sum
+    select.map(shelf => shelf.products.size).sum.toFloat / select.map(_.capacity).sum
   }
+
   def hasAvailableSpaceFor(temperature: Temperature) =
     shelves.values.filter(shelf => shelf.supports.contains(temperature)).find(_.hasAvailableSpace).isDefined
 
@@ -190,8 +188,6 @@ private[storage] case class Storage(log: LoggingAdapter,
     pairProductsForPotentialSwap()
   }
 
-  private def refresh(time: LocalDateTime = LocalDateTime.now()): Unit = shelves.values.foreach(_.refresh(time))
-
   /**
    * Pick up packaged product for an order.
    * Returns "Either" found package option on the left, or a discarded order on the right
@@ -223,21 +219,24 @@ private[storage] case class Storage(log: LoggingAdapter,
    */
   def snapshot(time: LocalDateTime = LocalDateTime.now()): Storage = {
     refresh(time)
-    val clonedShelves = shelves.map(kv=> (kv._1,kv._2.snapshot()))
-    copy(log, clonedShelves, criticalTimeForSwapsThresholdMillis,time)
+    val clonedShelves = shelves.map(kv => (kv._1, kv._2.snapshot()))
+    copy(log, clonedShelves, criticalTimeForSwapsThresholdMillis, time)
   }
+
   def reportStatus(verbose: Boolean = false): Unit = {
     val buffer = new StringBuffer()
-    reportToBuffer(buffer, "\n",verbose)
+    reportToBuffer(buffer, "\n", verbose)
     log.info(buffer.append("\n").toString)
   }
 
-  def reportToBuffer(buffer:StringBuffer, heading:String, verbose: Boolean, time: LocalDateTime = LocalDateTime.now()): Unit = {
+  def reportToBuffer(buffer: StringBuffer, heading: String, verbose: Boolean, time: LocalDateTime = LocalDateTime.now()): Unit = {
     refresh(time)
     buffer.append(heading).append("\n")
     buffer.append(s">>> Storage capacity utilization: ${this.totalProductsOnShelves}/${this.totalCapacity}, last refreshed:$createdOn")
     shelves.toList.sortBy(_._1.toString).map(_._2).foreach(_.reportContents(buffer, verbose))
   }
+
+  private def refresh(time: LocalDateTime = LocalDateTime.now()): Unit = shelves.values.foreach(_.refresh(time))
 
   def totalProductsOnShelves: Int = shelves.values.map(_.size).sum
 

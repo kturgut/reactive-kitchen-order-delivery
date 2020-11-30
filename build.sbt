@@ -8,7 +8,7 @@ lazy val leveldbVersion = "0.7"
 lazy val leveldbjniVersion = "1.8"
 
 libraryDependencies ++= Seq(
- // "com.typesafe.akka" %% "akka-actor" % akkaVersion,
+  // "com.typesafe.akka" %% "akka-actor" % akkaVersion,
   "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
   "com.typesafe.akka" %% "akka-persistence" % akkaVersion,
   "com.typesafe.akka" %% "akka-testkit" % akkaVersion,

@@ -5,7 +5,6 @@ import java.time.temporal.ChronoUnit
 import java.time.{Duration, LocalDateTime}
 
 import reactive.JacksonSerializable
-import reactive.delivery.Courier
 import reactive.order.{Order, Temperature}
 
 
@@ -14,7 +13,7 @@ final case class PackagedProduct(remainingShelfLife: Float,
                                  createdOn: LocalDateTime,
                                  updatedOn: LocalDateTime,
                                  order: Order,
-                                 initialDeliveryWindow:(Long,Long)) extends JacksonSerializable{
+                                 initialDeliveryWindow: (Long, Long)) extends JacksonSerializable {
 
   import PackagedProduct._
 
@@ -31,7 +30,8 @@ final case class PackagedProduct(remainingShelfLife: Float,
   def phantomCopy(shelfDecayModifier: Float, current: LocalDateTime = LocalDateTime.now()): PackagedProduct = {
     val duration = ChronoUnit.MILLIS.between(updatedOn, current).toFloat / MillliSecondsInOneSecond
     if (duration > 0) {
-      val remainingLife = math.max(0, if (remainingShelfLife <= 0) 0 else (remainingShelfLife - duration - order.decayRate * duration * shelfDecayModifier))
+      val remainingLife = math.max(0,
+        if (remainingShelfLife <= 0) 0 else (remainingShelfLife - duration - order.decayRate * duration * shelfDecayModifier))
       val newValue = math.max(0, if (order.shelfLife <= 0) 0f else remainingLife.toFloat / order.shelfLife)
       copy(remainingLife, newValue, createdOn, current, order: Order)
     }
@@ -44,7 +44,8 @@ final case class PackagedProduct(remainingShelfLife: Float,
     var newValue = value
     while (newValue > 0) {
       val duration = ChronoUnit.MILLIS.between(updatedOn, futureTime).toFloat / MillliSecondsInOneSecond
-      val remainingLife = math.max(0, if (remainingShelfLife <= 0) 0 else (remainingShelfLife - duration - order.decayRate * duration * shelfDecayModifier))
+      val remainingLife = math.max(0,
+        if (remainingShelfLife <= 0) 0 else (remainingShelfLife - duration - order.decayRate * duration * shelfDecayModifier))
       newValue = math.max(0, if (order.shelfLife <= 0) 0f else remainingLife.toFloat / order.shelfLife)
       futureTime = futureTime.plus(incrementInMillis, ChronoUnit.MILLIS)
     }
@@ -69,7 +70,7 @@ case object PackagedProduct {
   implicit val ordering = PackagedProduct.IncreasingValue
   val MillliSecondsInOneSecond = 1000
 
-  def apply(order: Order, deliveryWindow:(Long,Long), time: LocalDateTime = LocalDateTime.now()): PackagedProduct = {
+  def apply(order: Order, deliveryWindow: (Long, Long), time: LocalDateTime = LocalDateTime.now()): PackagedProduct = {
     new PackagedProduct(order.shelfLife, 1, time, time, order, deliveryWindow)
   }
 
@@ -77,9 +78,13 @@ case object PackagedProduct {
     def compare(a: PackagedProduct, b: PackagedProduct): Int =
       Ordering.Tuple2(Ordering.Float, Ordering.String).compare((a.value, a.order.id), (b.value, b.order.id))
   }
+
 }
 
-private[storage] case class ExpirationInfo(product: PackagedProduct, ifInCurrentShelf: Long, ifMovedToTarget: Long, timeInMillisTillPickup: (Long, Long), shelf: Shelf) {
+private[storage] case class ExpirationInfo(product: PackagedProduct,
+                                           ifInCurrentShelf: Long,
+                                           ifMovedToTarget: Long,
+                                           timeInMillisTillPickup: (Long, Long), shelf: Shelf) {
   def wantsToMove(millisIntoFuture: Long) = !willExpireForSure(millisIntoFuture) && ifInCurrentShelf < ifMovedToTarget
 
   /**
@@ -90,9 +95,9 @@ private[storage] case class ExpirationInfo(product: PackagedProduct, ifInCurrent
     (bestTime - millisIntoFuture < 0) && (bestTime > timeInMillisTillPickup._1)
   }
 
-  def okToMove(millisIntoFuture: Long):Boolean = !willExpireForSure(millisIntoFuture) && safeToMove(millisIntoFuture)
+  def okToMove(millisIntoFuture: Long): Boolean = !willExpireForSure(millisIntoFuture) && safeToMove(millisIntoFuture)
 
-  private def safeToMove(millisIntoFuture: Long):Boolean = (ifMovedToTarget - millisIntoFuture) > timeInMillisTillPickup._1
+  private def safeToMove(millisIntoFuture: Long): Boolean = (ifMovedToTarget - millisIntoFuture) > timeInMillisTillPickup._1
 
 }
 

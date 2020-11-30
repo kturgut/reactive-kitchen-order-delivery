@@ -2,9 +2,9 @@ package reactive.order
 
 import java.time.LocalDateTime
 
-import akka.actor.{ActorLogging, ActorRef, Cancellable}
+import akka.actor.{ActorLogging, Cancellable}
 import akka.event.{LoggingAdapter, NoLogging}
-import akka.persistence.{DeleteMessagesFailure, DeleteMessagesSuccess, PersistentActor, RecoveryCompleted, SaveSnapshotFailure, SaveSnapshotSuccess, SnapshotOffer, SnapshotSelectionCriteria}
+import akka.persistence._
 import reactive.config.OrderMonitorConfig
 import reactive.coordinator.ComponentState.Operational
 import reactive.coordinator.Coordinator.ReportStatus
@@ -13,75 +13,56 @@ import reactive.delivery.Courier.DeliveryComplete
 import reactive.storage.PackagedProduct
 import reactive.storage.ShelfManager.{CourierNotAvailable, DiscardOrder, ExpiredShelfLife, ShelfCapacityExceeded}
 import reactive.{JacksonSerializable, OrderMonitorActor}
-import sun.tools.jconsole.ProxyClient.SnapshotMBeanServerConnection
 
 import scala.collection.immutable.ListMap
-import scala.concurrent.duration.DurationInt
 
+// @formatter:off
 /**
- * OrderProcessor is a Stateful Persistent Actor. Parent Actor is CloudKitchens.
- *
- * What is ResourceManager State?
- *     - activeOrders: ListMap of OrderLifeCycle objects by orderId.
- *       This is acting as a fixed sized FIFO cache, maintaining only the active orders that are in the pipeline.
- *     - Various counters
- *         - Last order received, totalOrdersReceived, totalTipsReceived etc.
- *     - Kitchens registered. Though the current code is for one kitchen it is possible to support multiple and
- *       match orders to kitchens. TODO
- *       CLEANUP Note: Create a case class and put all state under OrderProcessorState. This will help implement Snapshot offer
- *       as we will simply save and retrieve the latest snapshot. Snapshots are created whenever we want.
- *       (ie. every 1K Orders for instance) TODO
+ * OrderMonitor is a Stateful Persistent Actor. Parent Actor is Coordinator.
+ * It keeps its state in OrderLifeCycleState, and updates it as it receives 'commands' which are stored as 'events'.
+ * After events are persisted successfully state is updated. OrderLifeCycleState maintains a fixed-size cache of all active orders'
+ * lifecycles. Cache is implemented as a FIFO where completed orders are removed from cache first.
  *
  * As a stateful persistent actor OrderProcessor can be in one of these two states:
- * 1- receiveCommand: All commands are received here under normal operation.
- * These commands are then persisted as Events on disk.
- * 2- receiveRecover: During startup all recovery messages goes into this receiver.
+ *     1- receiveCommand: All commands are received here under normal operation.
+ *     2- receiveRecover: During startup all recovery messages goes into this receiver.
  *
- * Timers: OrderProcessor has a scheduled timer to wakeup every 6 seconds to check if there has been any activity
- * This timer sends ShutDown signal to Master in case of no life cycle events received during that time.
+ * Timers:
+ *     activityTimer: OrderProcessor has a scheduled timer to wakeup every 6 seconds to check if there has been any activity
+ *     This timer sends ShutDown signal to Master in case of no life cycle events received during that time.
  *
- * OrderProcessor receives the following incoming messages:
- * KitchenReadyForService => Helps establish the connection between Kitchen and OrderProcessor
- * Order =>
- * Send back OrderDeceivedAck to Customer
- * Forward Order to select Kitchen
- * PackagedProduct (LifeCycleEvent) => Update state cache
- * DiscardOrder (LifeCycleEvent) => Update state cache
- * DeliveryComplete (LifeCycleEvent) => Update state cache
+ * OrderMonitor receives the following commands and creates the following events that are stored:
+ *     Order => OrderRecord
+ *     PackagedProduct => ProductRecord
+ *     DiscardOrder => DiscardOrderRecord
+ *     DeliveryComplete => DeliveryCompleteRecord
  *
- * Order LifeCycle
- * 1- Order "created"
- * 2- PackagedProduct is created (Kitchen prepared the order and sent to ShelfManager)
- * 3- CourierAssignment - currently not recorded TODO
- * 4- Pickup (of PackagedProduct from ShelfManager)  - currently not recorded TODO
- * 5- DeliveryAcceptanceRequest - sent from Courier to Customer - currently not recorded TODO
- * 6- DeliveryAcceptance - sent from Customer to Courier - currently not recorded TODO
- * 7- OrderComplete - Courier to OrderProcessor
- * 8- DiscardOrder - from ShelfManager
- * 9- Unknown termination - We should also record if for any reason delivery could not get completed for reasons outside of ShelfManager TODO
+ * If for any reason OrderMonitor has to restart after a crash, it replays these recorded events to recreate its state.
+ * OrderMonitor takes regular snapshots of its state to disk to help improve the recovery time. These snapshots are taken after a fixed
+ * number of events are recorded.
  *
- * During Recovery after a crash TODO
- * LifeCycle cache for active orders will be recreated by "Event Sourcing". This gives us opportunity for disaster recovery:
- * Based on the above Order LifeCycle state transition, we can check if the order is recent, and we can follow up with Kitchen or Courier
- * and reissue as needed.
+ * Persistent OrderLifeCycle state can be queried. Not currently demonstrated.
+ *
+ * NOTE: To clean the persistent state:
+ *    a) Send OrderMonitor ResetDatabase command
+ *    b) Manually delete the files under these folders:
+ *               target/cloudKitchens/journal
+ *               target/cloudKitchens/snapshots
  */
-
+// @formatter:on
 
 case object OrderMonitor {
 
-  case object ResetDatabase
+  sealed trait Event extends JacksonSerializable
 
   /**
    * Request cached state for a given order id. Since cache size is limited, You can also do persistent query if not in cache
    */
-  case class RequestOrderLifeCycle(idOption:Option[Int]=None) extends JacksonSerializable
-  case object OrderLifeCycleNotFoundInCache
-
-  // EVENTS
-
-  sealed trait Event extends JacksonSerializable
+  case class RequestOrderLifeCycle(idOption: Option[Int] = None) extends JacksonSerializable
 
   case class OrderRecord(time: LocalDateTime, order: Order) extends Event
+
+  // EVENTS
 
   case class ProductRecord(time: LocalDateTime, product: PackagedProduct) extends Event
 
@@ -89,42 +70,42 @@ case object OrderMonitor {
 
   case class DiscardOrderRecord(time: LocalDateTime, discard: DiscardOrder) extends Event
 
-  case class OrderLifeCycleState(orderCounter:Int=0,
-                                 lastOrderReceived:String="Unknown",
-                                 productionCounter:Int=0,
-                                 deliveryCounter:Int=0,
-                                 discardedOrderCounter:Int=0,
-                                 totalTipsReceived:Int=0,
-                                 eventCounter:Int=0,
-                                 activeOrders:ListMap[String, OrderLifeCycle] = ListMap.empty) extends JacksonSerializable {
+  case class OrderLifeCycleState(orderCounter: Int = 0,
+                                 lastOrderReceived: String = "Unknown",
+                                 productionCounter: Int = 0,
+                                 deliveryCounter: Int = 0,
+                                 discardedOrderCounter: Int = 0,
+                                 totalTipsReceived: Int = 0,
+                                 eventCounter: Int = 0,
+                                 activeOrders: ListMap[String, OrderLifeCycle] = ListMap.empty) extends JacksonSerializable {
 
-    def update(event:Event, maxCacheSize:Int, log:LoggingAdapter=NoLogging):OrderLifeCycleState = {
+    def update(event: Event, maxCacheSize: Int, log: LoggingAdapter = NoLogging): OrderLifeCycleState = {
       event match {
-        case OrderRecord(_,order) =>
-          copy(orderCounter=orderCounter+1,
-            lastOrderReceived=order.id,
-            eventCounter=eventCounter+1,
-            activeOrders=updateCache(order,
-              (lifeCycle: OrderLifeCycle) => lifeCycle, () => OrderLifeCycle(order),maxCacheSize))
+        case OrderRecord(_, order) =>
+          copy(orderCounter = orderCounter + 1,
+            lastOrderReceived = order.id,
+            eventCounter = eventCounter + 1,
+            activeOrders = updateCache(order,
+              (lifeCycle: OrderLifeCycle) => lifeCycle, () => OrderLifeCycle(order), maxCacheSize))
 
-        case ProductRecord(_,product) =>
-          copy(productionCounter=productionCounter+1,
-            eventCounter=eventCounter+1,
-            activeOrders=updateCache(product.order,
-              (lifeCycle: OrderLifeCycle) => lifeCycle.update(product, log),() => OrderLifeCycle(product.order, Some(product)),maxCacheSize))
+        case ProductRecord(_, product) =>
+          copy(productionCounter = productionCounter + 1,
+            eventCounter = eventCounter + 1,
+            activeOrders = updateCache(product.order,
+              (lifeCycle: OrderLifeCycle) => lifeCycle.update(product, log), () => OrderLifeCycle(product.order, Some(product)), maxCacheSize))
 
-        case DiscardOrderRecord(_,discard) =>
-          copy(discardedOrderCounter=discardedOrderCounter + 1,
-            eventCounter=eventCounter+1,
-            activeOrders=updateCache(discard.order,
-              (lifeCycle: OrderLifeCycle) => lifeCycle.update(discard, log),() =>OrderLifeCycle(discard.order, None, None,Some(discard)),maxCacheSize))
+        case DiscardOrderRecord(_, discard) =>
+          copy(discardedOrderCounter = discardedOrderCounter + 1,
+            eventCounter = eventCounter + 1,
+            activeOrders = updateCache(discard.order,
+              (lifeCycle: OrderLifeCycle) => lifeCycle.update(discard, log), () => OrderLifeCycle(discard.order, None, None, Some(discard)), maxCacheSize))
 
-        case DeliveryCompleteRecord(_,delivery) =>
-          copy(totalTipsReceived=totalTipsReceived + delivery.acceptance.tips,
-            deliveryCounter = deliveryCounter  + 1,
-            eventCounter=eventCounter + 1,
-            activeOrders=updateCache(delivery.product.order,
-              (lifeCycle: OrderLifeCycle) => lifeCycle.update(delivery, log), () => OrderLifeCycle(delivery.assignment.order, None, Some(delivery)),maxCacheSize))
+        case DeliveryCompleteRecord(_, delivery) =>
+          copy(totalTipsReceived = totalTipsReceived + delivery.acceptance.tips,
+            deliveryCounter = deliveryCounter + 1,
+            eventCounter = eventCounter + 1,
+            activeOrders = updateCache(delivery.product.order,
+              (lifeCycle: OrderLifeCycle) => lifeCycle.update(delivery, log), () => OrderLifeCycle(delivery.assignment.order, None, Some(delivery)), maxCacheSize))
       }
     }
 
@@ -132,36 +113,30 @@ case object OrderMonitor {
      * Create or update OrderLifeCycle entry in cache. Maintain cache size under max limit
      */
     private def updateCache(order: Order,
-                    update: (OrderLifeCycle) => OrderLifeCycle,
-                    create: () => OrderLifeCycle,
-                    maxCacheSize:Int
-                   ): ListMap[String, OrderLifeCycle] = {
+                            update: (OrderLifeCycle) => OrderLifeCycle,
+                            create: () => OrderLifeCycle,
+                            maxCacheSize: Int
+                           ): ListMap[String, OrderLifeCycle] = {
       fifo(activeOrders.get(order.id) match {
         case Some(lifeCycle) =>
           activeOrders + (order.id -> update(lifeCycle))
         case None => activeOrders + (order.id -> create())
-      },maxCacheSize)
+      }, maxCacheSize)
     }
 
     /**
      * First removes the completed orders and then others to maintain cache size
      */
-    def fifo(in:ListMap[String, OrderLifeCycle],maxCacheSize:Int):ListMap[String, OrderLifeCycle] = {
-      if (in.size>maxCacheSize) {
+    def fifo(in: ListMap[String, OrderLifeCycle], maxCacheSize: Int): ListMap[String, OrderLifeCycle] = {
+      if (in.size > maxCacheSize) {
         val diff = in.size - maxCacheSize
         val toRemove = in.map(_._2).filter(_.completed).toList.reverse.take(diff).map(_.order.id)
-        in.filter(kv=> !toRemove.contains(kv._1)).take(maxCacheSize)
+        in.filter(kv => !toRemove.contains(kv._1)).take(maxCacheSize)
       }
       else in
     }
 
-    private def reportFiltered(list:Iterable[OrderLifeCycle], filter:OrderLifeCycle=>Boolean, prefix:String, log:LoggingAdapter) = {
-      log.info(s"===     $prefix order summary from order-life-cycle cache:     ===")
-      list.filter(filter).foreach{life=>log info life.toShortString}
-      log.info(s"")
-    }
-
-    def report(log:LoggingAdapter, message: String, verbose:Boolean = false) = {
+    def report(log: LoggingAdapter, message: String, verbose: Boolean = false) = {
       log.info(s"======== OrderLifeCycleMonitor $message: -cache size:${activeOrders.keys.size}  ===========")
       log.info(s"  Total orders received:$orderCounter.")
       log.info(s"  Total tips received:$totalTipsReceived.")
@@ -173,42 +148,53 @@ case object OrderMonitor {
       log.info(s"  Total discarded orders in cache:${activeOrders.values.filter(_.discarded).size}.")
       if (verbose) {
         log.info("========  Detail report for orders in cache below. For orders not in cache you can do persistent query!!! ==========")
-        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>(!o.completed),s"Incomplete (possibly lost in system)",log)
-        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>
-          (o.discarded && o.discard.get.reason == ExpiredShelfLife ),s"Discarded for $ExpiredShelfLife",log)
-        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>
-          (o.discarded && o.discard.get.reason == ShelfCapacityExceeded ),s"Discarded for $ShelfCapacityExceeded",log)
-        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>
-          (o.discarded && o.discard.get.reason == CourierNotAvailable ),s"Discarded for $CourierNotAvailable",log)
-        reportFiltered(activeOrders.values,(o:OrderLifeCycle)=>(o.delivered),s"Delivered",log)
+        reportFiltered(activeOrders.values, (o: OrderLifeCycle) => (!o.completed), s"Incomplete (possibly lost in system)", log)
+        reportFiltered(activeOrders.values, (o: OrderLifeCycle) =>
+          (o.discarded && o.discard.get.reason == ExpiredShelfLife), s"Discarded for $ExpiredShelfLife", log)
+        reportFiltered(activeOrders.values, (o: OrderLifeCycle) =>
+          (o.discarded && o.discard.get.reason == ShelfCapacityExceeded), s"Discarded for $ShelfCapacityExceeded", log)
+        reportFiltered(activeOrders.values, (o: OrderLifeCycle) =>
+          (o.discarded && o.discard.get.reason == CourierNotAvailable), s"Discarded for $CourierNotAvailable", log)
+        reportFiltered(activeOrders.values, (o: OrderLifeCycle) => (o.delivered), s"Delivered", log)
       }
     }
 
+    private def reportFiltered(list: Iterable[OrderLifeCycle], filter: OrderLifeCycle => Boolean, prefix: String, log: LoggingAdapter) = {
+      log.info(s"===     $prefix order summary from order-life-cycle cache:     ===")
+      list.filter(filter).foreach { life => log info life.toShortString }
+      log.info(s"")
+    }
+
   }
+
+  case object ResetDatabase
+
+  case object OrderLifeCycleNotFoundInCache
+
 }
 
 
 class OrderMonitor extends PersistentActor with ActorLogging {
 
   import OrderMonitor._
+
+  override val persistenceId: String = "OrderLifeCycleManagerPersistenceId"
   val config = OrderMonitorConfig(context.system)
   var state = OrderLifeCycleState()
   var schedule = createTimeoutWindow()
-
-  override val persistenceId: String = "OrderLifeCycleManagerPersistenceId"
 
   /**
    * Normal Command handler
    */
   override def receiveCommand: Receive = {
 
-    case _:SystemState | ReportStatus =>
-      sender ! ComponentState(OrderMonitorActor,Operational, Some(self), 1)
+    case _: SystemState | ReportStatus =>
+      sender ! ComponentState(OrderMonitorActor, Operational, Some(self), 1)
 
     case order: Order =>
       val event = OrderRecord(LocalDateTime.now(), order)
       persist(event) { event =>
-        log.info(s"Received ${state.orderCounter+1}th order on ${event.time}:$order")
+        log.info(s"Received ${state.orderCounter + 1}th order on ${event.time}:$order")
         updateState(event)
       }
 
@@ -223,7 +209,7 @@ class OrderMonitor extends PersistentActor with ActorLogging {
       val event = DiscardOrderRecord(LocalDateTime.now(), discard)
       persist(event) { event =>
         log.debug(s"Order update: discarded: ${event.discard.order.name} " +
-          s"for ${event.discard.reason} id:${event.discard.order.id}. Total discarded:${state.discardedOrderCounter+1}")
+          s"for ${event.discard.reason} id:${event.discard.order.id}. Total discarded:${state.discardedOrderCounter + 1}")
         updateState(event)
       }
 
@@ -234,7 +220,7 @@ class OrderMonitor extends PersistentActor with ActorLogging {
         updateState(event)
       }
 
-    case request:RequestOrderLifeCycle =>
+    case request: RequestOrderLifeCycle =>
       log.debug(s"Responding to order life cycle info request")
       val id = request.idOption.getOrElse(state.lastOrderReceived).toString
       sender() ! state.activeOrders.getOrElse(id, OrderLifeCycleNotFoundInCache)
@@ -242,13 +228,50 @@ class OrderMonitor extends PersistentActor with ActorLogging {
     case Coordinator.Shutdown =>
       context.stop(self)
 
-    case _:SaveSnapshotSuccess =>
+    case _: SaveSnapshotSuccess =>
       log.debug(s"Snapshot taken")
 
     case ResetDatabase =>
       log.warning("!!!Resetting OrderLifeCycle persistent store!!!!")
       this.deleteMessages(Long.MaxValue)
       this.deleteSnapshots(SnapshotSelectionCriteria.Latest)
+  }
+
+  /**
+   * Update state from event.
+   * Reset activity timer.
+   * Checkpoint if needed
+   */
+  def updateState(event: Event): Unit = {
+    mayBeCheckpoint()
+    resetActivityTimer()
+    state = state.update(event, config.MaxOrderLifeCycleCacheSize, log)
+  }
+
+  import reactive.system.dispatcher
+
+  private def resetActivityTimer() = {
+    schedule.cancel()
+    schedule = createTimeoutWindow()
+  }
+
+  /**
+   * Will shutdown system if no Order activity
+   */
+  def createTimeoutWindow(): Cancellable = {
+    context.system.scheduler.scheduleOnce(config.InactivityShutdownTimer) {
+      log.info(s"No activity in the last ${config.InactivityShutdownTimer.toSeconds} seconds!")
+      state.report(log, "is shutting down", true)
+      schedule.cancel()
+      context.parent ! Coordinator.Shutdown
+    }
+  }
+
+  def mayBeCheckpoint(): Unit = {
+    if (state.eventCounter % config.MaxEventsWithoutCheckpoint == 0) {
+      log.debug(s"Taking snapshot after ${state.eventCounter} events received")
+      saveSnapshot(state)
+    }
   }
 
   /**
@@ -276,51 +299,15 @@ class OrderMonitor extends PersistentActor with ActorLogging {
 
     case RecoveryCompleted =>
       if (state.orderCounter > 0) {
-        state.report(log,"completed recovery of state upon restart")
+        state.report(log, "completed recovery of state upon restart")
       }
 
-    case SnapshotOffer(metadata,snapshot:OrderLifeCycleState) =>
+    case SnapshotOffer(metadata, snapshot: OrderLifeCycleState) =>
       log.info(s"Recovering from snapshot with timestamp: ${metadata.timestamp}")
       state = snapshot
 
-    case error:SaveSnapshotFailure =>
+    case error: SaveSnapshotFailure =>
       log.error(s"Error when taking a snapshot $error")
-  }
-
-  import reactive.system.dispatcher
-  private def resetActivityTimer() = {
-    schedule.cancel()
-    schedule = createTimeoutWindow()
-  }
-
-  /**
-   * Will shutdown system if no Order activity
-   */
-  def createTimeoutWindow(): Cancellable = {
-    context.system.scheduler.scheduleOnce(config.InactivityShutdownTimer) {
-      log.info(s"No activity in the last ${config.InactivityShutdownTimer.toSeconds} seconds!")
-      state.report(log,"is shutting down",true)
-      schedule.cancel()
-      context.parent ! Coordinator.Shutdown
-    }
-  }
-
-  /**
-   * Update state from event.
-   * Reset activity timer.
-   * Checkpoint if needed
-   */
-  def updateState(event:Event):Unit = {
-    mayBeCheckpoint()
-    resetActivityTimer()
-    state = state.update(event,config.MaxOrderLifeCycleCacheSize,log)
-  }
-
-  def mayBeCheckpoint():Unit = {
-    if (state.eventCounter % config.MaxEventsWithoutCheckpoint == 0) {
-      log.debug(s"Taking snapshot after ${state.eventCounter} events received")
-      saveSnapshot(state)
-    }
   }
 
 }

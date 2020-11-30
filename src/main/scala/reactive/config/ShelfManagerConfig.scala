@@ -1,7 +1,7 @@
 package reactive.config
 
 
-import akka.actor.{Actor, ActorSystem, ExtendedActorSystem, Extension, ExtensionId, ExtensionIdProvider, Props}
+import akka.actor.{ActorSystem, ExtendedActorSystem, Extension, ExtensionId, ExtensionIdProvider}
 import com.typesafe.config.Config
 
 import scala.concurrent.duration.{Duration, FiniteDuration}
@@ -23,6 +23,8 @@ case class ShelfConfig(config: Config) {
 class ShelfManagerConfig(config: Config) extends Extension {
 
   implicit def toFiniteDuration(d: java.time.Duration): FiniteDuration = Duration.fromNanos(d.toNanos)
+
+  val SystemDispatcherConfigPath = "reactive.system.shelf-manager-dispatcher"
 
   val CriticalTimeThresholdForSwappingInMillis: FiniteDuration = config.getDuration("critical-time-threshold-for-swapping-millis")
 

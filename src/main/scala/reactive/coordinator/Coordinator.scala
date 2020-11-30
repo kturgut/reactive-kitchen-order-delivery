@@ -11,13 +11,14 @@ import reactive.coordinator.ComponentState.{Operational, State}
 import reactive.customer.Customer
 import reactive.customer.Customer.SimulateOrdersFromFile
 import reactive.delivery.Dispatcher
-import reactive.delivery.Dispatcher.CourierAvailability
 import reactive.kitchen.Kitchen
 import reactive.order.OrderMonitor.{RequestOrderLifeCycle, ResetDatabase}
 import reactive.order.{OrderMonitor, OrderProcessor}
 
 
 case object ComponentState {
+
+  val heartbeatingStates = Seq(Initializing, UnhealthyButOperational, Operational)
 
   sealed trait State
 
@@ -32,8 +33,6 @@ case object ComponentState {
   case object ShuttingDown extends State
 
   case object ShutDown extends State
-
-  val heartbeatingStates = Seq(Initializing, UnhealthyButOperational, Operational)
 
 }
 
@@ -88,9 +87,9 @@ case class SystemState(components: Map[String, ComponentState]) {
 
   def shelfManagerOption: Option[ActorRef] = actorOption(ShelfManagerActor)
 
-  def customerOption: Option[ActorRef] = actorOption(CustomerActor)
-
   private def actorOption(key: String): Option[ActorRef] = components.get(key).map(_.actor).flatten
+
+  def customerOption: Option[ActorRef] = actorOption(CustomerActor)
 }
 
 case object SystemState {
@@ -216,6 +215,7 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
   }
 
   import system.dispatcher
+
   def evaluateState(systemState: SystemState): SystemState = {
     val report = systemState.components.filter(_._2.state != Operational).map(comp => s"${comp._1} is ${comp._2.state}")
     if (report.nonEmpty) log.debug(s"System state not healthy:[${report.mkString("! ")}]")
@@ -270,6 +270,9 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
     }
   }
 
+  def broadcastRouter(systemState: SystemState): Router =
+    Router(BroadcastRoutingLogic(), systemState.activeActors.map(ActorRefRoutee(_)).toIndexedSeq)
+
   private def createHeartBeatSchedule(systemState: SystemState): Map[String, Cancellable] =
     systemState.activeActors.map(createHeartBeatSchedule).toMap
 
@@ -282,9 +285,6 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
     schedule.get(heartBeat.actor.get.path.toStringWithoutAddress).foreach(_.cancel())
     schedule + createHeartBeatSchedule(heartBeat.actor.get)
   }
-
-  def broadcastRouter(systemState: SystemState): Router =
-    Router(BroadcastRoutingLogic(), systemState.activeActors.map(ActorRefRoutee(_)).toIndexedSeq)
 
 }
 
