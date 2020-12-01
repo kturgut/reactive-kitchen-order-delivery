@@ -11,7 +11,7 @@ object Reactive extends App {
 
   val demo = system.actorOf(Props[Coordinator], CoordinatorActor)
   demo ! Initialize
-  demo ! RunSimulation(numberOfOrdersPerSecond = 10, shelfLifeMultiplier = 0.1f, limit = 200, resetDB = false)
+  demo ! RunSimulation(limit = 200, resetDB = false)
 }
 
 

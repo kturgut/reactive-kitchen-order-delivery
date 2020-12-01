@@ -31,7 +31,7 @@ import scala.concurrent.duration.DurationInt
  *      - shelfMultiplier: if you want to experiment system behavior for faster expiring products set this to a number between 0 and 1 as multiplier
  *      - limit: controls number of messages that will be processed from orders.json file.
  *      - resetDB: If you want to reset the database state (in OrderMonitor) you can turn this on, or simply delete the files under
- *                 /target/reactive/journal and /target/reactive/snapshots (see config)
+ *                 /target/reactive  (see config)
  *
  * - DeliveryAcceptanceRequest => DeliveryAcceptance(with tip)
  *      Couriers which are assigned to delivery the PackagedProduct that is created for the order send this message to customer at the time of delivery

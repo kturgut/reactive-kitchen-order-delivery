@@ -2,6 +2,30 @@
 
 Reactive is a real-time system that emulates the full-fillment of delivery orders for a kitchen.
 
+# Overview of how Kitchen Operates 
+* ORDER: A typical order has the following structure:
+    * "id": "1",
+    * "name": "McFlury",
+    * "temp": "frozen",  # preferred storage shelf temperature for this order
+    * "shelfLife": 375,  # shelf wait max duration is in seconds
+    * "decayRate": 0.4   # modifier for products *value* when delivered
+* STORAGE: 
+    * When order is prepared as a *product* it is sent to ShelfManager to be stored on a shelf. To optimize shelf life each order should ideally be stored on a shelf that matches its temperature.
+    * System recognizes the following Temperatures: Hot, Frozen, Cold
+    * When shelf for a given temperature is full, those orders can be placed on a special *Overflow* shelf that can store products of any temperature.
+    * Each shelf has the following settings: capacity, and decayModifier. DecayModifier is used in calculatio nof products *value* which diminishes over time
+    * By design, overflow shelf has higher decay modifier (default=2, configurable) than other shelves (default=1,configurable)
+* PRODUCT VALUE
+    * Value of a product is calculated by this formula:  
+       * value = (shelfLife - orderAge - decayRate * orderAge * shelfLifeModifier) / shelfLife
+  DELIVERY
+    * Couriers are assigned to deliver products created by the kitchen. Couriers have a delivery window (default=2-6 seconds,configurable) within which they attempt to deliver the products.
+  OBJECTIVE: CUSTOEMER SATISFACTION
+    * Customers who pickup the products they ordered on time, tip generously  
+  OBJECTIVE
+    * Deliver as many products to customers as possible with the highest value preserved
+       
+
 # Components
 # Component Overview
 1. *Coordinator* is the main controller, its main function is to initialize the system and monitor health. All other actors are supervised by Controller. Currently it is working with DefaultSupervision Strategy. 
@@ -128,12 +152,10 @@ Main Flows in the System are
 1. It is a runnable Application. Right mouse click on the green triangle in Intellij and run it.
 1. Currently it sends two messages to Coordinator actor that it starts:
    1. demo ! Initialize
-   1. demo ! RunSimulation(numberOfOrdersPerSecond = 2, shelfLifeMultiplier = 1f, limit = 200, resetDB = false)
+   1. demo ! RunSimulation(limit::q q = 200, resetDB = false)
 1. You can modify these simulation settings:
-    1. numberOfOrdersPerSecond controls the throttle setting of stream from Customer to OrderProcessor
-    1. shelfMultiplier: if you want to experiment system behavior for faster expiring products set this to a number between 0 and 1 as multiplier
     1. limit: controls number of messages that will be processed from orders.json file.
-    1. resetDB: If you want to reset the database state (in OrderMonitor) you can turn this on, or simply delete the files under /target/reactive/journal and /target/reactive/snapshots
+    1. resetDB: If you want to reset the database state (in OrderMonitor) you can turn this on, or simply delete the files under /target/reactive
 1. Alternative setting: 
     demo ! RunSimulation(numberOfOrdersPerSecond = 10, shelfLifeMultiplier = 0.1f, limit = 200, resetDB = false)   
 1. After 5 seconds of no activity, program will automatically shutdown by OrderMonitor and OrderLifeCycle Report will be printed to the log.
@@ -147,14 +169,21 @@ the orderId of the Orders read from file before it sends it to OrderProcessor.
 1. You can change the log level by modifying:   # loglevel = "INFO" to akka.loglevel = "DEBUG" and vica versa.
    1. Most of the chatty conversations between components, like heartbeats, and status and availability updates etc are only viewable in DEBUG mode.
 1. You can also change configurations for ShelfManager and Dispatcher to observe system behavior under different settings. For example:
-   1. Dispatcher:    dispatcher{
+   1. Customer
+            customer {
+              # number of orders Customer actor will stream to OrderProcessor per second
+              max-orders-per-second = 10
+              # modifies the shelf life of the orders on file, to help simulate faster expiring products. default is 1.
+              # 0.5 would reduce the shelf life by half. Must be positive float
+              shelf-life-multiplier = 0.1
+              ..
+            }
+   1. Dispatcher:    
+             dispatcher{
               ...
-              max-number-of-couriers = 200  # Adjust this based on expected order throughput. 
-              courier {
-                  delivery-time-window-millis = 4000
-                  earliest-delivery-after-order-received-millis = 2000
+              max-number-of-couriers = 200  # Adjust this based on expected order throughput.
+              ... 
               }
-          }
    1. ShefManager reporting frequency can be adjusted with these:
        shelfManager {
            ...

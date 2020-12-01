@@ -139,12 +139,10 @@ object Coordinator {
   case class StopComponent(name: String) extends JacksonSerializable
 
   /**
-   * @param numberOfOrdersPerSecond How many records will be send in one second
-   * @param shelfLifeMultiplier     To modify the shelf life on Orders read from file. Value range: (0,1]
-   * @param limit                   How many records to be sent to Order Processor, by default all will be sent
-   * @param resetDB                 Whether or not to reset the OrderMonitor's persistent database which tracks order lifecycle.
+   * @param limit      How many records to be sent to Order Processor, by default all will be sent
+   * @param resetDB    Whether or not to reset the OrderMonitor's persistent database which tracks order lifecycle.
    */
-  case class RunSimulation(numberOfOrdersPerSecond: Int = 2, shelfLifeMultiplier: Float = 1, limit: Int = Int.MaxValue, resetDB: Boolean = false)
+  case class RunSimulation(limit: Int = Int.MaxValue, resetDB: Boolean = false)
 
   case object Initialize
 
@@ -227,8 +225,8 @@ class Coordinator extends Actor with ActorLogging with Stash with Timers with Co
       log.warning(s"Component with ref ${ref.path} is terminated")
       context.become(openForService(state.terminated(ref), heartBeatSchedule - ref.path.toStringWithoutAddress))
 
-    case RunSimulation(ordersPerSecond, shelfLifeMultiplier, limit, resetDB) =>
-      runSimulation(state, shelfLifeMultiplier, ordersPerSecond, limit, resetDB)
+    case RunSimulation(limit, resetDB) =>
+      runSimulation(state, customerConf.ShelfLifeMultiplier, customerConf.MaxOrdersPerSecond, limit, resetDB)
 
     case componentState: ComponentState =>
       val updatedState = evaluateState(state.update(componentState))
