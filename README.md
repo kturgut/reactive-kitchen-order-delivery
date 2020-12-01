@@ -4,21 +4,29 @@ Reactive is a real-time system that emulates the full-fillment of delivery order
 
 # Components
 # Component Overview
-1. Coordinator is the main controller, its main function is to initialize the system and monitor health. All other actors are supervised by Controller. Currently it is working with DefaultSupervision Strategy. 
-1. Customer. Simulates customers sending orders. Currently, reads from a file and sends as a stream. It is possible to turn this into an ongoing stream.
-1. OrderProcessor routes orders to Kitchens. 
-1. OrderMonitor is the only persistent actor in the System. It maintains of all LifeCycle events for all orders. Eventually it can act as 'Service Bus' which the other actors can subscribe to life-cycle events. 
-1. Kitchen prepares the orders and hands them off to ShelfManager for Storage. It also notifies Dispatcher expecting an assigned Courier for Delivery.
-1. Courier delivers the orders routed by Dispatcher. Courier notifies its state to Dispatcher to ensure that Courier does not get assigned for additional orders while on delivery
-1. ShelfManager manages Storage till packaged products get delivered to customers by Couriers. It maintains a cache of active courier assignments to packagedProducts.
+1. *Coordinator* is the main controller, its main function is to initialize the system and monitor health. All other actors are supervised by Controller. Currently it is working with DefaultSupervision Strategy. 
+1. *Customer* simulates customers sending orders. Currently, reads from a file and sends as a stream. It is possible to turn this into an ongoing stream.
+1. *OrderProcessor* routes orders to Kitchens. 
+1. *OrderMonitor* is the only persistent actor in the System. It maintains of all LifeCycle events for all orders. Eventually it can act as 'Service Bus' which the other actors can subscribe to life-cycle events. 
+1. *Kitchen* prepares the orders and hands them off to ShelfManager for Storage. It also notifies Dispatcher expecting an assigned Courier for Delivery.
+1. *Courier* delivers the orders routed by Dispatcher. Courier notifies its state to Dispatcher to ensure that Courier does not get assigned for additional orders while on delivery
+1. *ShelfManager* manages Storage till packaged products get delivered to customers by Couriers. It maintains a cache of active courier assignments to packagedProducts.
 ![Components](images/ComponentDiagram.png)
 
 ## Main Flows
-### Successful Delivery
+Main Flows in the System are
+1. Initialization, Service Discovery and Heart Beat monitoring (not documented here)
+1. OrderComplete - Successfull Delivery
+1. DiscardOrder 
+    1. Reason: CourierNotAvailable
+    1. Reason: ShelfLifeExpiration or ShelfCapacityExceeded
+
+### OrderComplete - Successful Delivery
 * Customer sends Orders to OrderProcessor
 * Orders are sent to Kitchen.
 * Kitchen prepares a "packaged product" for the order and passes it to ShelfManager for storage till pickup. 
   * Kitchen simultaneously notifies Dispatcher for upcoming delivery assignment
+* Kitchen always monitors the availability of Shelf space as well as Couriers from Dispatcher. If any one of these goes below desired levels, Kitchen temporarily goes into a suspended state (100mls, configurable). After timer expires it checks if the conditions of availability improved, and if so it resumes the operation or goes back into another suspension.
 * Dispatcher assigns a Courier for incoming packaged product delivery request and routes it to one of its Couriers
   for pickup and delivery, using RoundRobin logic among its available Couriers
 * Courier upon receiving request for delivery
@@ -31,18 +39,28 @@ Reactive is a real-time system that emulates the full-fillment of delivery order
 
 ![DeliveryComplete](images/DeliveryCompleteSequence.png)
 ### Discarded Order
-* ShelfManager calls ShelfLifeOptimization logic either periodically (every 1 second) or as products are added to the shelf
+#### CourierNotAvailable
+* Dispatcher has a maximum number of Couriers it can allocate. Couriers on delivery are removed from Dispatchers router till they become Available
+* When Dispatcher received a new Product to deliver, and if there are no Couriers available at the time, it declines the request with DeclineCourierRequest message
+* When Kitchen receives this response, it updates its State of CourierAvailability, and forwards the DeclineCourierRequest message to ShelfManager
+* ShelfManager then removes the Product from Shelf and notifies OrderMonitor and Customer
+
+
+![DiscardOrder](images/DiscardOrder_CourierNotAvailable.png)
+#### ShelfLifeExceeded or ShelfCapacityExceeded
+* ShelfManager calls ShelfLifeOptimization logic either periodically (every 1 second, configurable) or as products are added  to the shelf
     * Any expired products are notified to Courier and Customer as DiscardOrder. They are also published to OrderMonitor for life-cycle tracking. 
 * Courier may get back a DiscardOrder message as response to PickupRequest if the product has expired just recently
 * Courier declines any orders while on delivery. It becomes available by sending Available message to Dispatcher only after delivery is complete or order is discarded.     
 
-![DiscardOrder](images/DiscardOrderSequence.png)
+![DiscardOrder](images/DiscardOrder_ExpirationOrCapacity.png)
 
 # Notes for Future Architectural Enhancements 
 1. Enhance BackPressure handling logic between major components. ie. Between OrderProcessor and Kitchen. 
 1. Coordinator to actively manage failed components, currently it is simply logging about unhealth components. 
 1. Circuit Breakers between major components. ie. OrderProcessor Kitchen.  OrderProcesor CourierDispatcher etc.
 1. OrderMonitor may publish incoming events to subscribers. It will cleanup some of the code.
+1. Allocate dedicated dispatchers (that manages ThreadPools) for each Actor
 1. Get ready to run on cluster. Please note that the code as written can be easily run on a multi-node cluster due to Akka's location transparency features, with very little code change if any.
 
 ## About AKKA Persistent Actors:
@@ -50,7 +68,6 @@ Reactive is a real-time system that emulates the full-fillment of delivery order
 1.   They also can create 'Snapshot's of their states so recovery can happen instantly. Not implemented yet. TODO
 1.   Akka supports various persistence options, like Relational, Cassandra etc. I chose LevelDb for simplicity
 1.   It is also possible to do a Persistent Query on PersistentActors to query state. Not implemented yet. TODO
-
 
 # ShelfLife Optimization algorithm
  
@@ -96,27 +113,29 @@ Reactive is a real-time system that emulates the full-fillment of delivery order
        1. CriticalZone is controlled by a constant currently with default=2 seconds
  1. If the overflow shelf is still full
    1. While overflow is over capacity: discard the product with the newest order creation timestamp. This is so that we minimize the time the customer gets feedback and we reduce waste if the product is already on the way to delivery
+   
  
 # Considerations for Improvement
 1. Swapping products between overflow and other shelves can be started before waiting for overflow shelf to be full to further optimize shelf life 
 1. If CourierAssignments can be adjusted by ShelfManager based on what product is at risk of expiration, it would improve customer satisfaction
 1. Further improvement after relaxing courier assignments might be that: we can learn from past orders as to what the likelyhood of a particular 'temperature sensitive' shelf to open up might be, and run a short simulation into the future to decide which product to discard.  
-
+1. Improved Test Coverage. I put coverage mostly around complex areas, but simply this project is too big to have full coverage without additiona time which I don't have.
 
 # Getting Started
-1. CloudKitchens actor is the main controller that starts the entire ActorSystem.
+1. Coordinator actor is the main controller that starts the entire ActorSystem.
 ## Run main Simulation
-1. Find Reactive Application under src/main/scala/reactive/CloudKitchens file. It is a runnable Application. Right mouse click on the green triangle in Intellij and run it.
-1. Currently it sends two messages to CloudKitchens actor that it starts
+1. Find Reactive Application under src/main/scala/reactive/Reactive file. 
+1. It is a runnable Application. Right mouse click on the green triangle in Intellij and run it.
+1. Currently it sends two messages to Coordinator actor that it starts:
    1. demo ! Initialize
    1. demo ! RunSimulation(numberOfOrdersPerSecond = 2, shelfLifeMultiplier = 1f, limit = 200, resetDB = false)
-      1. You can modify these simulation settings:
-         1. numberOfOrdersPersecond controls the throttle setting of stream from Customer to OrderProcessor
-         1. shelfMultiplier: if you want to experiment system behavior for faster expiring products set this to a number between 0 and 1 as multiplier
-         1. limit: controls number of messages that will be processed from orders.json file.
-         1. resetDB: If you want to reset the database state (in OrderMonitor) you can turn this on, or simply delete the files under /target/cloudKitchens/journal and /target/cloudKitchens/snapshots
-      1. Alternative setting: 
-        demo ! RunSimulation(numberOfOrdersPerSecond = 10, shelfLifeMultiplier = 0.1f, limit = 200, resetDB = false)   
+1. You can modify these simulation settings:
+    1. numberOfOrdersPerSecond controls the throttle setting of stream from Customer to OrderProcessor
+    1. shelfMultiplier: if you want to experiment system behavior for faster expiring products set this to a number between 0 and 1 as multiplier
+    1. limit: controls number of messages that will be processed from orders.json file.
+    1. resetDB: If you want to reset the database state (in OrderMonitor) you can turn this on, or simply delete the files under /target/reactive/journal and /target/reactive/snapshots
+1. Alternative setting: 
+    demo ! RunSimulation(numberOfOrdersPerSecond = 10, shelfLifeMultiplier = 0.1f, limit = 200, resetDB = false)   
 1. After 5 seconds of no activity, program will automatically shutdown by OrderMonitor and OrderLifeCycle Report will be printed to the log.
 ## Note on OrderMonitor
 1. OrderMonitor is a persistent actor. If you run the simulation multiple times, Customer gets the last orderId from previous runs and automatically updates

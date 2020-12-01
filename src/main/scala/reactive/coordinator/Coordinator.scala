@@ -15,6 +15,35 @@ import reactive.kitchen.Kitchen
 import reactive.order.OrderMonitor.{RequestOrderLifeCycle, ResetDatabase}
 import reactive.order.{OrderMonitor, OrderProcessor}
 
+// @formatter:off
+/**
+ * Coordinator is the parent of all actors in the system, therefore it can Supervise failures on any component.
+ * Currently its function is:
+ *  - initialize the systems components, and help them with discovery of other components
+ *  - send heart-beat checks (every second, configurable) to each registered component to monitor state
+ *  - report state to log if there is any failures that need attention
+ *  - gracefully shutdown the system if no order activity is monitored for more than 5 seconds (configurable) by OrderMonitor
+ *
+ * Currently it is functioning with default supervision strategy which will recreate failed components as needed.
+ * Examples of future improvements might be:
+ *   - If OrderMonitor crashes and restarts for any reason, we can check the status of active orders in flight and reissue them as needed.
+ *   - Support registering multiple actors for the same Component Key
+ *   - Cooordinator messages must be made into UnboundedHighPriorityControl messages so they get priority across the system.
+ *   - Coordinator needs to have its own dedicated dispatcher, the one that manages threadpools.
+ **
+ * Timers
+ *   heartBeatTimers: Each component has its own heartbeat timer. This ensures that if a component has sent update on its own, it will not be
+ *   pinged again for another update at a fixed time interval, rather the component specific timer is reset after each update.
+ *
+ * Commands it understands:
+ *   - Initialize
+ *   - StartComponent
+ *   - StopComponent
+ *   - RunSimulation
+ *   - Shutdown
+ **
+ */
+// @formatter:on
 
 case object ComponentState {
 

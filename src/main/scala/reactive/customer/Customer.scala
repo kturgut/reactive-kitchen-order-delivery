@@ -26,23 +26,27 @@ import scala.concurrent.duration.DurationInt
  * Currently it handles these incoming messages:
  *
  * - SimulateOrdersFromFile =>
- * Reads the orders file into a stream and sends them to OrderProcessor
- * It is possible to control the rate of submissions to OrderProcessor with 'maxNumberOfOrdersPerSecond' parameter
- * shelfLifeMultiplier parameter is used to adjust the shelf life of Orders on file for testing purposes.
+ *      Reads the orders file into a stream and sends them to OrderProcessor. Parameters:
+ *      - numberOfOrdersPerSecond controls the throttle setting of stream from Customer to OrderProcessor
+ *      - shelfMultiplier: if you want to experiment system behavior for faster expiring products set this to a number between 0 and 1 as multiplier
+ *      - limit: controls number of messages that will be processed from orders.json file.
+ *      - resetDB: If you want to reset the database state (in OrderMonitor) you can turn this on, or simply delete the files under
+ *                 /target/reactive/journal and /target/reactive/snapshots (see config)
  *
  * - DeliveryAcceptanceRequest => DeliveryAcceptance(with tip)
- * Couriers which are assigned to delivery the PackagedProduct that is creatd for the
- * order send this message to customer at the time of delivery
- * By design, customer's tip the Couriers higher if the delivery happens within 4 seconds after order.
+ *      Couriers which are assigned to delivery the PackagedProduct that is created for the order send this message to customer at the time of delivery
+ *      By design, customer's tip the Couriers higher if the delivery happens within 4 seconds after order.
  *
- * TODO send DiscardOrder notice to Customer too
+ * - OrderLifeCycle =>
+ *      OrderMonitor sends Customer the last order it processed in terms of OrderLifeCycle object. This is used to modify the order ids read from file
+ *      to ensure we have unique ids in the system.
  */
 // @formatter:on
 
 object Customer {
 
   case class SimulateOrdersFromFile(orderHandler: ActorRef,
-                                    maxNumberOfOrdersPerSecond: Int = 2,
+                                    maxOrdersPerSecond: Int = 2,
                                     shelfLifeMultiplier: Float = 1,
                                     limit: Int = Int.MaxValue
                                    ) extends JacksonSerializable

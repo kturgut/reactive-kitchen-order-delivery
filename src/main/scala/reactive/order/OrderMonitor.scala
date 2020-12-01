@@ -46,8 +46,8 @@ import scala.collection.immutable.ListMap
  * NOTE: To clean the persistent state:
  *    a) Send OrderMonitor ResetDatabase command
  *    b) Manually delete the files under these folders:
- *               target/cloudKitchens/journal
- *               target/cloudKitchens/snapshots
+ *               target/reactive/journal
+ *               target/reactive/snapshots
  */
 // @formatter:on
 

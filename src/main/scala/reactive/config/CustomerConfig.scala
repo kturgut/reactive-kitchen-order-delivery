@@ -11,6 +11,8 @@ class CustomerConfig(config: Config) extends Extension with ConfigBase {
 
   val OnTimeDeliveryRecommendedTip: Int = config.getInt("on-time-delivery-recommended-tip")
   val LateDeliveryRecommendedTip: Int = config.getInt("on-time-delivery-recommended-tip")
+  val MaxOrdersPerSecond: Int = config.getInt("max-orders-per-second")
+  val ShelfLifeMultiplier: Float = config.getDouble("shelf-life-multiplier").toFloat
   val CustomerHappinessInMillisThreshold: FiniteDuration = config.getDuration("customer-happiness-in-millis-threshold")
   val SimulationOrderFilePath: String = config.getString("simulation-order-file-path")
 
